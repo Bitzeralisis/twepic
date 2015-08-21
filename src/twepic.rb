@@ -4,7 +4,7 @@ require 'twitter'
 require_relative 'config'
 require_relative 'clients'
 require_relative 'entities'
-require_relative 'world/world'
+require_relative 'world'
 
 def set_config(config)
   config.consumer_key = TwepicRc::CONSUMER_KEY

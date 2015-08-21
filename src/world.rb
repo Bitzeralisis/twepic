@@ -14,6 +14,9 @@ class Thing
   def tick
   end
 
+  def draw
+  end
+
 end
 
 class World < Thing
@@ -31,6 +34,7 @@ class World < Thing
       Ncurses.noecho
       Ncurses.nonl
       Ncurses.stdscr.nodelay(true)
+      Ncurses.ESCDELAY = 25
       Ncurses.curs_set(0)
       Ncurses.stdscr.intrflush(false)
       Ncurses.stdscr.keypad(true)
@@ -43,11 +47,14 @@ class World < Thing
       end
 
       # Loop forever
+      skip = false
       while true
         start = Time.now.to_f
         tick
+        draw #unless skip
         len = Time.now.to_f - start
         sleep 0.016-len if len < 0.016 # Update no more than 60 times a second
+        skip = len > 0.016 # If the last tick too long then skip the next draw
       end
 
     ensure
@@ -109,9 +116,11 @@ class World < Thing
   end
 
   def tick
-    @things.each do |thing|
-      thing.tick
-    end
+    @things.each { |thing| thing.tick }
+  end
+
+  def draw
+    @things.each { |thing| thing.draw }
     Ncurses.stdscr.noutrefresh
     Ncurses.doupdate
   end
