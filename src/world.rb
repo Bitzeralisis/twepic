@@ -2,6 +2,7 @@
 
 require 'ncursesw'
 require 'time'
+require_relative 'window'
 
 class Thing
 
@@ -17,13 +18,21 @@ class Thing
   def draw
   end
 
+  def do_noutrefresh
+  end
+
 end
 
 class World < Thing
 
+  include HasWindow
+
   def initialize
+    @window = Ncurses
+
     @world = self
     @things = []
+    @quit = false
   end
 
   def run
@@ -39,6 +48,10 @@ class World < Thing
       Ncurses.stdscr.intrflush(false)
       Ncurses.stdscr.keypad(true)
 
+      # Setup mouse stuff
+      Ncurses.mousemask(Ncurses::ALL_MOUSE_EVENTS, [ ])
+      Ncurses.mouseinterval(0)
+
       # Setup color pairs for 1-15 (standard + bright) and 16-231 (216 colors)
       # as that color and black background. Pairs 232-255 free for custom use.
       Ncurses.start_color
@@ -48,7 +61,7 @@ class World < Thing
 
       # Loop forever
       skip = false
-      while true
+      until @quit
         start = Time.now.to_f
         tick
         draw #unless skip
@@ -71,50 +84,6 @@ class World < Thing
     @things << thing
   end
 
-  def width
-    Ncurses.COLS
-  end
-
-  def height
-    Ncurses.LINES
-  end
-  
-  def getch
-    Ncurses.getch
-  end
-
-  def color(pair)
-    Ncurses.attrset(Ncurses.COLOR_PAIR(pair))
-  end
-
-  def color3(r,g,b)
-    Ncurses.attrset(Ncurses.COLOR_PAIR(16 + 36*r + 6*g + b))
-  end
-
-  def color4(r,g,b,a)
-    Ncurses.attrset(Ncurses.COLOR_PAIR(r + 2*g + 4*b + 8*a))
-  end
-
-  def bold
-    Ncurses.attron(Ncurses::A_BOLD)
-  end
-
-  def dim
-    Ncurses.attron(Ncurses::A_DIM)
-  end
-
-  def invert
-    Ncurses.attron(Ncurses::A_REVERSE)
-  end
-
-  def write(x, y, string)
-    Ncurses.mvaddstr(y, x, string)
-  end
-
-  def clear
-    Ncurses.erase
-  end
-
   def tick
     @things.each { |thing| thing.tick }
   end
@@ -122,7 +91,9 @@ class World < Thing
   def draw
     @things.each { |thing| thing.draw }
     Ncurses.stdscr.noutrefresh
+    @things.each { |thing| thing.do_noutrefresh }
     Ncurses.doupdate
   end
 
 end
+

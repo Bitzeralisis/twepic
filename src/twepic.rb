@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 
+require 'htmlentities'
 require 'twitter'
 require_relative 'config'
 require_relative 'clients'
-require_relative 'entities'
+require_relative 'panels'
 require_relative 'world'
 
 def set_config(config)
@@ -14,6 +15,8 @@ def set_config(config)
 end
 
 def main
+  $htmlentities = HTMLEntities.new
+
   rest = Twitter::REST::Client.new { |c| set_config(c) }
   stream = Twitter::Streaming::Client.new { |c| set_config(c) }
   clients = TwitterClients.new(rest, stream)
