@@ -18,7 +18,7 @@ class Thing
   def draw
   end
 
-  def do_noutrefresh
+  def render
   end
 
 end
@@ -28,8 +28,6 @@ class World < Thing
   include HasWindow
 
   def initialize
-    @window = Ncurses
-
     @world = self
     @things = []
     @quit = false
@@ -49,7 +47,7 @@ class World < Thing
       Ncurses.stdscr.keypad(true)
 
       # Setup mouse stuff
-      Ncurses.mousemask(Ncurses::ALL_MOUSE_EVENTS, [ ])
+      Ncurses.mousemask(Ncurses::ALL_MOUSE_EVENTS, [])
       Ncurses.mouseinterval(0)
 
       # Setup color pairs for 1-15 (standard + bright) and 16-231 (216 colors)
@@ -58,6 +56,8 @@ class World < Thing
       (1..231).each do |i|
         Ncurses.init_pair(i, i, 0)
       end
+
+      @window = Ncurses.stdscr
 
       # Loop forever
       skip = false
@@ -90,9 +90,16 @@ class World < Thing
 
   def draw
     @things.each { |thing| thing.draw }
-    Ncurses.stdscr.noutrefresh
-    @things.each { |thing| thing.do_noutrefresh }
+    @things.each { |thing| thing.render }
     Ncurses.doupdate
+  end
+
+  def render
+    Ncurses.stdscr.noutrefresh
+  end
+
+  def quit
+    @quit = true
   end
 
 end

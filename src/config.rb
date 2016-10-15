@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 
 module Config
-  
+  # TODO: Make like everything configurable lol
 end
 
 module TwepicRc

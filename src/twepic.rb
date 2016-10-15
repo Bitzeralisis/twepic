@@ -22,7 +22,7 @@ def main
   clients = TwitterClients.new(rest, stream)
   panel = TweetsPanel.new(clients)
 
-  world = World.new()
+  world = World.new
   world.add(panel)
   clients.start_streaming
 
