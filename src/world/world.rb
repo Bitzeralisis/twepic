@@ -2,35 +2,21 @@
 
 require 'ncursesw'
 require 'time'
+require_relative 'thing'
 require_relative 'window'
 
-class Thing
-
-  attr_writer :world
-
-  def initialize
-    @world = nil
-  end
-
-  def tick
-  end
-
-  def draw
-  end
-
-  def render
-  end
-
-end
-
-class World < Thing
+# The root Thing in a world.
+# By instantiating a World and calling :run, an entire ncurses context will be set up and the world
+# will continually process its Things by calling :tick, :draw, and :render on them.
+class World < ThingContainer
 
   include HasWindow
 
   def initialize
-    @world = self
     @things = []
     @quit = false
+
+    self.world = self
   end
 
   def run
@@ -57,14 +43,15 @@ class World < Thing
         Ncurses.init_pair(i, i, 0)
       end
 
-      @window = Ncurses.stdscr
+      @curses_window = Ncurses.stdscr
 
       # Loop forever
       skip = false
       until @quit
         start = Time.now.to_f
-        tick
+        tick(1)
         draw #unless skip
+        render(0, 0, screen_width, screen_height) #unless skip
         len = Time.now.to_f - start
         sleep 0.016-len if len < 0.016 # Update no more than 60 times a second
         skip = len > 0.016 # If the last tick too long then skip the next draw
@@ -79,22 +66,8 @@ class World < Thing
     end
   end
 
-  def add(thing)
-    thing.world = self
-    @things << thing
-  end
-
-  def tick
-    @things.each { |thing| thing.tick }
-  end
-
-  def draw
-    @things.each { |thing| thing.draw }
-    @things.each { |thing| thing.render }
+  def rerender(*args)
     Ncurses.doupdate
-  end
-
-  def render
     Ncurses.stdscr.noutrefresh
   end
 

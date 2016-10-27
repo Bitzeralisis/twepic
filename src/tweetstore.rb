@@ -5,9 +5,12 @@ require 'rmagick'
 
 class TweetStore
 
+  attr_reader :config
   attr_reader :reply_tree
 
-  def initialize
+  def initialize(config)
+    @config = config
+
     @tweets = []
     @tweets_index = {}
     @reply_tree_node = nil
@@ -24,7 +27,7 @@ class TweetStore
   end
 
   def [](*args)
-    return @tweets[*args]
+    @tweets[*args]
   end
 
   def delete_id(id)
@@ -45,7 +48,7 @@ class TweetStore
   end
 
   def size
-    return @tweets.size
+    @tweets.size
   end
 
   # Actual methods that do stuff
@@ -70,19 +73,14 @@ class TweetStore
                                           [ col1.red, col1.green, col1.blue,
                                             col2.red, col2.green, col2.blue ])
         image = image.resize(user.screen_name.length+1, 1)
-        @profile_images[id] = image
         @profile_urls[id] = url
+        @profile_images[id] = image
       end
     end
   end
 
   def get_profile_image(user)
-    check_profile_image(user)
     @profile_images[user.id]
-  end
-
-  def maybe_get_profile_image(id)
-    @profile_images[id]
   end
 
   def rebuild_reply_tree(*args)

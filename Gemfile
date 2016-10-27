@@ -1,9 +1,12 @@
 source 'https://rubygems.org'
 
+gem 'clipboard'
+gem 'ffi'
 gem 'htmlentities'
 gem 'ncursesw'
 gem 'rmagick'
 gem 'ruby-duration'
 gem 'unicode_utils'
 gem 'twitter'
+gem 'twitter_oauth'
 gem 'twitter-text'

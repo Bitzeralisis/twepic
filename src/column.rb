@@ -4,7 +4,8 @@ require 'duration'
 require 'singleton'
 require 'twitter'
 require 'unicode_utils'
-require_relative 'window'
+require_relative 'world/thing'
+require_relative 'world/window'
 
 class ColumnDefinitions
 
@@ -25,48 +26,15 @@ class ColumnDefinitions
 
 end
 
-class Column
+class Column < Thing
 
   include HasPad
-
-  attr_accessor :will_redraw
-  attr_accessor :will_rerender
-
-  def tick(time)
-  end
-
-  def draw
-    if @will_redraw || @will_redraw == nil
-      redraw
-      @will_redraw = false
-      @will_rerender = true
-    end
-    @will_rerender
-  end
-
-  def redraw
-  end
-
-  def render(*args)
-    if @will_rerender
-      rerender(*args)
-      @will_rerender = false
-    end
-  end
 
   def rerender(x, y, w, h)
     return unless render_range.size > 0
     l = [ 0, render_range.min ].max
     r = [ render_range.max, w-1 ].min
     render_pad(l, 0, x+l, y, x+r, y+h-1) if r >= l
-  end
-
-  def flag_redraw(redraw = true)
-    @will_redraw = redraw
-  end
-
-  def flag_rerender(rerender = true)
-    @will_rerender = rerender
   end
 
   def render_range
@@ -110,6 +78,13 @@ class FlagsColumn < Column
     new_pad(2, 1)
   end
 
+  def tick(time)
+    if @tweetline.favorited? != @favorited
+      @favorited = @tweetline.favorited?
+      flag_redraw
+    end
+  end
+
   def redraw
     pad.erase
     @f1 = false
@@ -147,13 +122,13 @@ end
 
 class UsernameColumn < Column
 
-  def self.draw_username(pad, x, name, image)
+  def self.draw_username(pad, x, y, name, image, *style)
     (0...name.length).each do |i|
       color = image.pixel_color(i,0)
       r,g,b = [ color.red, color.green, color.blue ]
       r,g,b = [r,g,b].map { |f| (((f/256.0/256.0)*0.89+0.11)*5).round }
-      pad.color(r,g,b)
-      pad.write(x+i, 0, name[i])
+      pad.color(r,g,b, *style)
+      pad.write(x+i, y, name[i])
     end
   end
 
@@ -168,7 +143,7 @@ class UsernameColumn < Column
     pad.erase
     name = "@#{@tweetline.tweet.user.screen_name}"
     profile_image = @tweetline.store.get_profile_image(@tweetline.tweet.user)
-    UsernameColumn.draw_username(pad, 0, name, profile_image)
+    UsernameColumn.draw_username(pad, 0, 0, name, profile_image)
     @render_range = (0...name.length)
   end
 
@@ -236,86 +211,10 @@ class TweetColumn < Column
 
   end
 
-  class FakeEntity
-    attr_reader :indices
-    def initialize(indices)
-      @indices = indices
-    end
-  end
-
-  class TweetPiece
-    attr_accessor :entity, :type
-    attr_reader :text
-    def initialize(entity, type, text)
-      @entity = entity
-      @type = type
-      @text = text
-    end
-    def text=(val)
-      @text = val
-      @_text_width = nil
-    end
-    def text_width
-      @_text_width ||= UnicodeUtils.display_width(@text)
-    end
-  end
-
   def initialize(tweetline)
     @tweetline = tweetline
-
-    # Transform entities. We do this by making a sorted list of entities we care about, splitting
-    # the tweet based on their indices, transforming the pieces that correspond to entities, and
-    # rejoining all the pieces
-    full_text = @tweetline.tweet.full_text
-
-    entities = @tweetline.tweet.user_mentions + @tweetline.tweet.urls + @tweetline.tweet.media
-    entities.sort! { |lhs, rhs| lhs.indices.first <=> rhs.indices.first }
-    entities.uniq! { |e| e.indices.first }
-    entities = [ FakeEntity.new([0]) ] + entities + [ FakeEntity.new([full_text.length]) ]
-    if @tweetline.retweet?
-      # Where [] denotes an entity, the tweet starts like '[]RT [@username]: text...'
-      # Put in the new FakeEntity {} to get rid of the colon '[]RT [@username]{:} text...'
-      colon_index = full_text.index(':')
-      entities.insert(2, FakeEntity.new([colon_index, colon_index+1]))
-    end
-
-    tweet_pieces = []
-    entities.each_cons(2) do |entity, next_entity|
-      case entity
-        when Twitter::Entity::UserMention
-          tweet_pieces << TweetPiece.new(entity, :mention_username, full_text[entity.indices.first...entity.indices.last])
-        when Twitter::Media::AnimatedGif, Twitter::Media::Photo, Twitter::Media::Video, Twitter::Entity::URL
-          slash_index = entity.display_url.index('/')
-          tweet_pieces << TweetPiece.new(entity, :link_domain, entity.display_url[0...slash_index])
-          tweet_pieces << TweetPiece.new(entity, :link_route, entity.display_url[slash_index..-1])
-        else
-          nil # Do nothing - the entity is discarded
-      end
-      tweet_pieces << TweetPiece.new(nil, :text, full_text[entity.indices.last...next_entity.indices.first])
-    end
-    if @tweetline.retweet?
-      # See above; the first piece will be the text 'RT', second the @username
-      tweet_pieces[0].type = :retweet_marker
-      tweet_pieces[1].type = :retweet_username
-    end
-    tweet_pieces.each { |piece| piece.text = $htmlentities.decode(piece.text) }
-    tweet_pieces = tweet_pieces.flat_map do |piece|
-      # TODO: Combine consecutive newlines and tabs, filter out empty strings
-      piece.text.split(/(\r\n|\r|\n|\t)/).map do |string|
-        case string
-          when "\r\n", "\r", "\n"
-            TweetPiece.new(nil, :whitespace, '↵ ')
-          when "\t"
-            TweetPiece.new(nil, :whitespace, '⇥ ')
-          else
-            TweetPiece.new(piece.entity, piece.type, string)
-        end
-      end
-    end
-
-    @pieces = tweet_pieces
-    @text_width = tweet_pieces.map { |piece| piece.text_width }.reduce(0, :+)
-    @text_length = tweet_pieces.map { |piece| piece.text.length }.reduce(0, :+)
+    @text_width = @tweetline.tweet_pieces.map { |piece| piece.text_width }.reduce(0, :+)
+    @text_length = @tweetline.tweet_pieces.map { |piece| piece.text.length }.reduce(0, :+)
     @trailer_x = 0
 
     new_pad(@text_width, 1)
@@ -329,35 +228,21 @@ class TweetColumn < Column
   def redraw
     pad.erase
     position = 0
-    @pieces.each do |piece|
-      case piece.type
-        when :text
-          if @tweetline.retweet?
-            pad.color(3,5,3)
-          elsif @tweetline.mention?
-            pad.color(5,4,3)
-          elsif @tweetline.own_tweet?
-            pad.color(3,5,5)
-          else
-            pad.color(1,1,1,1)
-          end
-        when :link_domain
-          pad.color(1,1,1,0)
-        when :link_route
-          pad.color(0,0,0,1)
-        when :whitespace
-          pad.color(0,0,0,1)
-        when :retweet_marker
-          pad.color(0,5,0)
-        when :mention_username
-          pad.color(4,3,2)
-        when :retweet_username
+    @tweetline.tweet_pieces.each do |piece|
+      color_code = @tweetline.store.config.tweet_colors_column(piece.type)
+      case color_code[0]
+        when :none
+          nil
+        when :username
           name = piece.text
-          profile_image = @tweetline.store.get_profile_image(@tweetline.tweet.retweeted_tweet.user)
-          UsernameColumn.draw_username(pad, position, name, profile_image)
+          profile_image = @tweetline.store.get_profile_image(piece.entity)
+          UsernameColumn.draw_username(pad, position, 0, name, profile_image, *color_code[1..-1])
+          position += piece.text_width
+        else
+          pad.color(*color_code)
+          pad.write(position, 0, piece.text)
+          position += piece.text_width
       end
-      pad.write(position, 0, piece.text) unless piece.type == :retweet_username
-      position += piece.text_width
     end
   end
 

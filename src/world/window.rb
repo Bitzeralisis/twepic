@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 
+# Interface objects with ncurses by including HasWindow or HasPad.
+
 require 'ncursesw'
 
 module HasWindow
@@ -21,7 +23,7 @@ module HasWindow
   end
   
   def getch
-    @window.getch
+    @curses_window.getch
   end
 
   # Sets curses's attributes for writing
@@ -38,7 +40,7 @@ module HasWindow
     when 4
       color4(*args)
     end
-    if options 
+    if options
       blink if options.delete(:blink)
       bold if options.delete(:bold)
       dim if options.delete(:dim)
@@ -66,55 +68,55 @@ module HasWindow
 
   # Sets color to the specified color pair id
   def color1(pair)
-    @window.attrset(Ncurses.COLOR_PAIR(pair))
+    @curses_window.attrset(Ncurses.COLOR_PAIR(pair))
   end
 
   # Sets color to the specified 216-color color pair, where r,g,b are integers
   # in the range [0,6)
   def color3(r,g,b)
-    @window.attrset(Ncurses.COLOR_PAIR(16 + 36*r + 6*g + b))
+    @curses_window.attrset(Ncurses.COLOR_PAIR(16 + 36*r + 6*g + b))
   end
 
   # Sets color to the specified 16-color color pair, where r,g,b,a are either 0
   # or 1
   def color4(r,g,b,i)
-    @window.attrset(Ncurses.COLOR_PAIR(r + 2*g + 4*b + 8*i))
+    @curses_window.attrset(Ncurses.COLOR_PAIR(r + 2*g + 4*b + 8*i))
   end
 
   def blink
-    @window.attron(Ncurses::A_BLINK)
+    @curses_window.attron(Ncurses::A_BLINK)
   end
 
   def bold
-    @window.attron(Ncurses::A_BOLD)
+    @curses_window.attron(Ncurses::A_BOLD)
   end
 
   def dim
-    @window.attron(Ncurses::A_DIM)
+    @curses_window.attron(Ncurses::A_DIM)
   end
 
   def reverse
-    @window.attron(Ncurses::A_REVERSE)
+    @curses_window.attron(Ncurses::A_REVERSE)
   end
 
   def standout
-    @window.attron(Ncurses::A_STANDOUT)
+    @curses_window.attron(Ncurses::A_STANDOUT)
   end
 
   def underline
-    @window.attron(Ncurses::A_UNDERLINE)
+    @curses_window.attron(Ncurses::A_UNDERLINE)
   end
 
   def write(x, y, string)
-    @window.mvaddstr(y, x, string)
+    @curses_window.mvaddstr(y, x, string)
   end
 
   def touchline(y, h)
-    Ncurses.touchline(@window, y, h)
+    Ncurses.touchline(@curses_window, y, h)
   end
 
   def erase
-    @window.erase
+    @curses_window.erase
   end
 
 end
@@ -136,13 +138,13 @@ module HasPad
   end
 
   def new_pad(width, height)
-    @window = Ncurses.newpad(height, width)
+    @curses_window = Ncurses.newpad(height, width)
     @_HasPad__width = width
     @_HasPad__height = height
   end
 
   def render_pad(src_x, src_y, dst_x, dst_y, dst_x2, dst_y2)
-    @window.pnoutrefresh(src_y, src_x, dst_y, dst_x, dst_y2, dst_x2)
+    @curses_window.pnoutrefresh(src_y, src_x, dst_y, dst_x, dst_y2, dst_x2)
   end
 
 end
