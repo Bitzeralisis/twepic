@@ -14,14 +14,6 @@ module HasWindow
     Ncurses.LINES
   end
 
-  def width
-    screen_width
-  end
-
-  def height
-    screen_height
-  end
-  
   def getch
     @curses_window.getch
   end
@@ -111,10 +103,6 @@ module HasWindow
     @curses_window.mvaddstr(y, x, string)
   end
 
-  def touchline(y, h)
-    Ncurses.touchline(@curses_window, y, h)
-  end
-
   def erase
     @curses_window.erase
   end
@@ -129,22 +117,32 @@ module HasPad
     self
   end
 
-  def width
-    @_HasPad__width
+  def pad_width
+    @pad_width
   end
 
-  def height
-    @_HasPad__height
+  def pad_height
+    @pad_height
   end
 
   def new_pad(width, height)
     @curses_window = Ncurses.newpad(height, width)
-    @_HasPad__width = width
-    @_HasPad__height = height
+    @pad_width = width
+    @pad_height = height
   end
 
   def render_pad(src_x, src_y, dst_x, dst_y, dst_x2, dst_y2)
     @curses_window.pnoutrefresh(src_y, src_x, dst_y, dst_x, dst_y2, dst_x2)
+  end
+
+end
+
+module PadHelpers
+
+  def rerender_pad(clip = self.clip, size = self.size, origin = self.origin)
+    return unless size.x > 0 && size.y > 0
+    gpos = global_pos
+    render_pad(origin.x+clip.x, origin.y+clip.y, gpos.x+clip.x, gpos.y+clip.y, gpos.x+clip.x+size.x-1, gpos.y+clip.y+size.y-1)
   end
 
 end

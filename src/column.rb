@@ -4,10 +4,11 @@ require 'duration'
 require 'singleton'
 require 'twitter'
 require 'unicode_utils'
+require_relative 'tweetstore'
 require_relative 'world/thing'
 require_relative 'world/window'
 
-class ColumnDefinitions
+module ColumnDefinitions
 
   COLUMNS = {
       SelectionColumn: 0,
@@ -15,8 +16,8 @@ class ColumnDefinitions
       UsernameColumn: 7,
       RelationsColumn: 24,
       TweetColumn: 26,
-      EntitiesColumn: -12,
-      TimeColumn: -7,
+      EntitiesColumn: -9,
+      TimeColumn: -4,
   }
   COLUMNS_BY_X = COLUMNS.to_a.sort do |lhs, rhs|
     lhs = lhs.last
@@ -29,16 +30,34 @@ end
 class Column < Thing
 
   include HasPad
+  include PadHelpers
 
-  def rerender(x, y, w, h)
-    return unless render_range.size > 0
-    l = [ 0, render_range.min ].max
-    r = [ render_range.max, w-1 ].min
-    render_pad(l, 0, x+l, y, x+r, y+h-1) if r >= l
+  attr_accessor :max_size
+
+  def initialize
+    super
+    size.y = 1
+    @max_size = Coord.new
   end
 
-  def render_range
-    (0...width)
+  def column_name
+    ''
+  end
+
+  def rerender
+    bounded_size = Coord.new([ size.x, max_size.x ].min, size.y)
+    rerender_pad(clip, bounded_size)
+  end
+
+end
+
+class EmptyColumn < Column
+
+  def initialize(_)
+    super()
+  end
+
+  def rerender
   end
 
 end
@@ -46,6 +65,8 @@ end
 class SelectionColumn < Column
 
   def initialize(tweetline)
+    super()
+    @size = Coord.new(3, 1)
     @tweetline = tweetline
     new_pad(3, 1)
   end
@@ -65,15 +86,12 @@ class SelectionColumn < Column
     end
   end
 
-  def render_range
-    (0...3)
-  end
-
 end
 
 class FlagsColumn < Column
 
   def initialize(tweetline)
+    super()
     @tweetline = tweetline
     new_pad(2, 1)
   end
@@ -81,6 +99,19 @@ class FlagsColumn < Column
   def tick(time)
     if @tweetline.favorited? != @favorited
       @favorited = @tweetline.favorited?
+      flag_redraw
+    end
+    if @tweetline.tweet.retweeted? != @retweeted
+      @retweeted = @tweetline.tweet.retweeted?
+      flag_redraw
+    end
+
+    if @tweetline.tweet.favorite_count != @favorite_count
+      @favorite_count = @tweetline.tweet.favorite_count
+      flag_redraw
+    end
+    if @tweetline.tweet.retweet_count != @retweet_count
+      @retweet_count = @tweetline.tweet.retweet_count
       flag_redraw
     end
   end
@@ -112,39 +143,48 @@ class FlagsColumn < Column
         pad.write(1, 0, 'R')
       end
     end
-  end
-
-  def render_range
-    ((@f1 ? 0 : 1) ... (@f2 ? 2 : 1))
+    @size = Coord.new((@f1?1:0) + (@f2?1:0), 1)
+    @clip = Coord.new(@f1 ? 0 : 1)
   end
 
 end
 
 class UsernameColumn < Column
 
+  include ProfileImageWatcher
+
   def self.draw_username(pad, x, y, name, image, *style)
-    (0...name.length).each do |i|
-      color = image.pixel_color(i,0)
-      r,g,b = [ color.red, color.green, color.blue ]
-      r,g,b = [r,g,b].map { |f| (((f/256.0/256.0)*0.89+0.11)*5).round }
-      pad.color(r,g,b, *style)
-      pad.write(x+i, y, name[i])
+    if image
+      (0...name.length).each do |i|
+        color = image.pixel_color(i,0)
+        r,g,b = [ color.red, color.green, color.blue ]
+        r,g,b = [r,g,b].map { |f| (((f/256.0/256.0)*0.89+0.11)*5).round }
+        pad.color(r,g,b, *style)
+        pad.write(x+i, y, name[i])
+      end
+    else
+      pad.color(0,0,0,1, *style)
+      pad.write(x, y, name)
     end
   end
 
-  attr_accessor :render_range
-
   def initialize(tweetline)
+    super()
     @tweetline = tweetline
     new_pad(20, 1)
+    watch_store(@tweetline.store)
+  end
+
+  def tick(time)
+    flag_redraw if any_profile_image_changed?
   end
 
   def redraw
     pad.erase
     name = "@#{@tweetline.tweet.user.screen_name}"
-    profile_image = @tweetline.store.get_profile_image(@tweetline.tweet.user)
-    UsernameColumn.draw_username(pad, 0, 0, name, profile_image)
-    @render_range = (0...name.length)
+    @profile_image = get_and_watch_profile_image(@tweetline.tweet.user)
+    UsernameColumn.draw_username(pad, 0, 0, name, @profile_image)
+    @size = Coord.new(name.length, 1)
   end
 
 end
@@ -152,6 +192,8 @@ end
 class RelationsColumn < Column
 
   def initialize(tweetline)
+    super()
+    @size = Coord.new(1, 1)
     @tweetline = tweetline
     new_pad(1, 1)
   end
@@ -178,13 +220,11 @@ class RelationsColumn < Column
     end
   end
 
-  def render_range
-    (0...1)
-  end
-
 end
 
 class TweetColumn < Column
+
+  include ProfileImageWatcher
 
   class TrailerHelper
 
@@ -212,15 +252,18 @@ class TweetColumn < Column
   end
 
   def initialize(tweetline)
+    super()
     @tweetline = tweetline
     @text_width = @tweetline.tweet_pieces.map { |piece| piece.text_width }.reduce(0, :+)
     @text_length = @tweetline.tweet_pieces.map { |piece| piece.text.length }.reduce(0, :+)
     @trailer_x = 0
 
     new_pad(@text_width, 1)
+    watch_store(@tweetline.store)
   end
 
   def tick(time)
+    flag_redraw if any_profile_image_changed?
     flag_rerender if @trailer_x-TrailerHelper::TRAILER_WIDTH < @text_width
     @trailer_x += time
   end
@@ -235,7 +278,7 @@ class TweetColumn < Column
           nil
         when :username
           name = piece.text
-          profile_image = @tweetline.store.get_profile_image(piece.entity)
+          profile_image = get_and_watch_profile_image(piece.entity)
           UsernameColumn.draw_username(pad, position, 0, name, profile_image, *color_code[1..-1])
           position += piece.text_width
         else
@@ -246,42 +289,44 @@ class TweetColumn < Column
     end
   end
 
-  def rerender(x, y, w, h)
-    super(x, y, w, h)
+  def render
+    if will_rerender
+      w = [ 0, [ @trailer_x - TrailerHelper::TRAILER_WIDTH, @text_width ].min ].max
+      @size = Coord.new(w, 1)
+    end
+    super
+  end
+
+  def rerender
+    super
 
     # Rendering the trailer messes things up if there are non-1-width characters
     if @text_width == @text_length
+      gpos = global_pos
       dst_l = @trailer_x - TrailerHelper::TRAILER_WIDTH
       dst_r = @trailer_x
       src_x = [ 0, -1*dst_l ].max
       dst_l_capped = [ 0, dst_l ].max
-      dst_r_capped = [ dst_r, w, @text_width ].min
+      dst_r_capped = [ dst_r, max_size.x, @text_width ].min
       TrailerHelper.instance.redraw
-      TrailerHelper.instance.render_pad(src_x, 0, x+dst_l_capped, y, x+dst_r_capped-1, y+h-1)
+      TrailerHelper.instance.render_pad(src_x, 0, gpos.x+dst_l_capped, gpos.y, gpos.x+dst_r_capped-1, gpos.y)
     end
-  end
-
-  def render_range
-    w = [ 0, [ @trailer_x - TrailerHelper::TRAILER_WIDTH, @text_width ].min ].max
-    (0...w)
   end
 
 end
 
 class EntitiesColumn < Column
 
-  attr_accessor :render_range
-
   def initialize(tweetline)
+    super()
     @tweetline = tweetline
     new_pad(3, 1)
-    @render_range = (0...0)
   end
 
   def redraw
     pad.erase
     if @tweetline.tweet.media?
-      @render_range = (0...3)
+      @size = Coord.new(3, 1)
       pad.color(1,1,1,0, :bold)
       case @tweetline.tweet.media[0]
         when Twitter::Media::Photo
@@ -295,7 +340,7 @@ class EntitiesColumn < Column
         when Twitter::Media::AnimatedGif
           pad.write(0, 0, 'gif');
         else
-          @render_range = (0...0)
+          @size = Coord.new(0, 1)
       end
     end
   end
@@ -305,6 +350,8 @@ end
 class TimeColumn < Column
 
   def initialize(tweetline)
+    super()
+    @size = Coord.new(3, 1)
     @tweetline = tweetline
     new_pad(3, 1)
   end
@@ -351,8 +398,27 @@ class TimeColumn < Column
     pad.write(0, 0, @timestring.rjust(3))
   end
 
-  def render_range
-    (0...3)
+end
+
+class StreamingColumn < Column
+
+  def initialize(tweetline)
+    super()
+    @size = Coord.new(20, 1)
+    new_pad(20, 1)
+    @time = 0
+  end
+
+  def tick(time)
+    @time += time
+    flag_redraw
+  end
+
+  def redraw
+    pad.erase
+    pad.color(0,0,0,1)
+    pad.write(0, 0, 'Streaming...')
+    pad.write(13, 0, %w[– \\ | /][(@time/3)%4])
   end
 
 end

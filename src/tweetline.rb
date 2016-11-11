@@ -4,46 +4,151 @@ require 'ncursesw'
 require 'set'
 require 'unicode_utils'
 require_relative 'column'
+require_relative 'world/thing'
 require_relative 'world/window'
 
-class TweetLine
+class ViewLine < Thing
+
+  def column_mappings
+    {
+        SelectionColumn: :SelectionColumn,
+        FlagsColumn: :EmptyColumn,
+        UsernameColumn: :EmptyColumn,
+        RelationsColumn: :EmptyColumn,
+        TweetColumn: :EmptyColumn,
+        EntitiesColumn: :EmptyColumn,
+        TimeColumn: :EmptyColumn,
+    }
+  end
 
   include HasPad
+  include PadHelpers
+
+  attr_reader :selected
+
+  def initialize(parent)
+    super()
+
+    @parent = parent
+    @world = @parent.world
+
+    @selected = false
+  end
+
+  def is_tweet?
+    false
+  end
+
+  def select(selected = true)
+    if @selected != selected
+      @selected = selected
+      flag_redraw
+    end
+  end
+
+  def tick_to(_, time)
+    @columns.each_value { |c| c.tick(time) }
+  end
+
+  def draw
+    super
+    @columns.each_value(&:draw)
+  end
+
+  def render
+    super
+
+    @columns.each_value do |col|
+      rendered = col.render
+      if @selected and rendered
+        # Draw one space of padding around columns to clear the selection dot there
+        if col.size.x > 0
+          gpos = global_pos
+          lp = gpos.x + col.pos.x + [ 0, col.clip.x ].max
+          rp = gpos.x + col.pos.x + [ col.clip.x+col.size.x-1, col.max_size.x-1 ].min
+          pad.render_pad(size.x, 0, lp-1, gpos.y, lp-1, gpos.y)
+          pad.render_pad(size.x, 0, rp+1, gpos.y, rp+1, gpos.y)
+        end
+      end
+    end
+  end
+
+  def flag_rerender(rerender = true)
+    super(rerender)
+    @columns.each_value { |c| c.flag_rerender(rerender) }
+  end
+
+  def on_resize(old_size, new_size)
+    resize_columns
+  end
+
+  private
+
+  def create_columns
+    @columns = {}
+    ColumnDefinitions::COLUMNS.each_key do |column_type|
+      @columns[column_type] = Object::const_get(column_mappings[column_type]).new(self)
+      @columns[column_type].parent = self
+    end
+    resize_columns
+  end
+
+  def resize_columns
+    (ColumnDefinitions::COLUMNS_BY_X + [[:nil, size.x]]).each_cons(2) do |column_def, next_column|
+      type = column_def.first
+      l = column_def.last
+      r = next_column.last
+      l += size.x if l < 0
+      r += size.x if r < 0
+      @columns[type].pos.x = l
+      @columns[type].max_size.x = r-l-1
+    end
+  end
+
+end
+
+class TweetLine < ViewLine
+
+  def column_mappings
+    super.merge({
+        FlagsColumn: :FlagsColumn,
+        UsernameColumn: :UsernameColumn,
+        RelationsColumn: :RelationsColumn,
+        TweetColumn: :TweetColumn,
+        EntitiesColumn: :EntitiesColumn,
+        TimeColumn: :TimeColumn,
+    })
+  end
 
   attr_reader :store
   attr_reader :tweet
   attr_reader :tweet_pieces
 
-  attr_reader :selected
   attr_reader :relations
   attr_writer :favorited
 
   attr_reader :replies_to_this
 
   def initialize(parent, store, tweet, time)
-    new_pad(1, 1)
+    super(parent)
+    @size = Coord.new(parent.size.x-3, 1)
+    new_pad(size.x+1, 1)
 
-    @parent = parent
     @store = store
     @tweet = tweet
     @time = time
 
-    build_tweet_pieces
-
-    @selected = false
     @relations = :none
     @favorited = @tweet.favorited?
 
-    @columns = {}
-    ColumnDefinitions::COLUMNS.each_key do |column_type|
-      @columns[column_type] = Object::const_get(column_type).new(self)
-    end
+    build_tweet_pieces
+    create_columns
 
     @store.check_profile_image(@tweet.user)
     @store.check_profile_image(@tweet.retweeted_tweet.user) if retweet?
     @tweet.user_mentions.each do |mention|
       if @store.get_profile_image(mention).nil?
-        user = @parent.clients.rest_api.user(mention.id)
+        user = @store.clients.rest_api.user(mention.id)
         @store.check_profile_image(user)
       end
     end
@@ -68,70 +173,51 @@ class TweetLine
     @favorited
   end
 
+  def is_tweet?
+    true
+  end
+
   def mention?
-    @_isMention ||= tweet.full_text.downcase.include?("@#{@parent.clients.user.screen_name.downcase}")
+    @_isMention ||= tweet.full_text.downcase.include?("@#{@store.clients.user.screen_name.downcase}")
   end
 
   def own_tweet?
-    @_isOwnTweet ||= tweet.user.id == @parent.clients.user.id
+    @_isOwnTweet ||= tweet.user.id == @store.clients.user.id
   end
 
   def retweet?
     @tweet.retweet?
   end
 
-  def flag_redraw(redraw = true)
-    @columns.each_value { |c| c.flag_redraw(redraw) }
-  end
-
-  def flag_rerender(rerender = true)
-    @rerender = rerender
-    @columns.each_value { |c| c.flag_rerender(rerender) }
-  end
-
-  def select(selected = true)
-    @selected = selected
-    flag_rerender
-  end
-
   def set_relations(relation = :none)
     @relations = relation
   end
 
-  def tick_to(time)
+  def tick_to(time, _)
     @columns.each_value { |c| c.tick(time-@time) }
     @time = time
   end
 
-  def draw(*options)
-    # TODO: Have some way of obliterating the entire line, so if a tweetline replaces something else
-    #       there's no random remaining text
-    @columns.each_value { |c| @rerender = c.draw || @rerender }
+  def redraw
+    # Clear/draw selection dots
+    # TODO: Fix bug where dots fuck up the text appearing like the streamer would
+    if @selected
+      pad.color(0,0,0,1, :dim)
+      pad.write(0, 0, ''.ljust(size.x, '·'))
+    else
+      pad.color(0)
+      pad.write(0, 0, ''.ljust(size.x))
+    end
+
+    if false
+      # Debug stuff: prints a bold `#` instead of ` ` for padding around columns
+      pad.color(1,1,1,1, :bold)
+      pad.write(size.x, 0, '#')
+    end
   end
 
-  def render(y)
-    return unless @rerender
-    (ColumnDefinitions::COLUMNS_BY_X + [[:nil, -3]]).each_cons(2) do |column_def, next_column|
-      type = column_def.first
-      l = column_def.last
-      r = next_column.last
-      l += @parent.world.width if l < 0
-      r += @parent.world.width if r < 0
-      @columns[type].render(l, y, r-l, 1)
-
-      if @selected
-        # Draw one space of padding around columns to clear the selection dot there
-        # TODO: Don't obliterate text from the previous/next columns with this
-        render_range = @columns[type].render_range
-        if render_range.size > 0
-          lp = l + [ 0, render_range.min ].max
-          rp = l + [ render_range.max, r-l-1 ].min
-          self.render_pad(0, 0, lp-1, y, lp, y)
-          self.render_pad(0, 0, rp+1, y, rp+2, y)
-        end
-      end
-    end
-    @rerender = false
+  def rerender
+    rerender_pad
   end
 
   private
@@ -209,6 +295,34 @@ class TweetLine
     end
 
     @tweet_pieces = tweet_pieces
+  end
+
+end
+
+class StreamLine < ViewLine
+
+  def column_mappings
+    super.merge({
+        TweetColumn: :StreamingColumn,
+    })
+  end
+
+  def initialize(parent)
+    super
+    @size = Coord.new(parent.size.x-3, 1)
+    new_pad(size.x, size.y)
+    create_columns
+  end
+
+  def is_tweet?
+    false
+  end
+
+  def redraw
+  end
+
+  def rerender
+    rerender_pad
   end
 
 end

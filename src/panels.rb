@@ -7,35 +7,27 @@ require_relative 'tweetline'
 require_relative 'tweetstore'
 require_relative 'world/world'
 
-class TweetsPanel < Thing
+class PanelSet < ThingContainer
+
+  include HasWindow
 
   attr_reader :clients
   attr_reader :config
   attr_reader :time
+  attr_reader :tweetstore
   attr_reader :world
 
-  START_Y = 4
-  END_Y = -11
-  def height
-    @_height ||= @world.height - START_Y + END_Y
-  end
-  SELECTION_START_Y = -10
-  POST_START_Y = -6
-  CONFIRM_START_Y = -6
-
   def initialize(clients, config)
+    super()
+    self.size = screen_width, screen_height
+
     @clients = clients
     @config = config
 
     @mode = :timeline
 
-    @tweetstore = TweetStore.new(config)
+    @tweetstore = TweetStore.new(config, clients)
     @tweetstore.check_profile_image(@clients.user)
-
-    @prev_top = -1
-    @next_top = 0
-    @selected = 0
-    @prev_selected = 0
 
     @statusline = ''
     @header = ''
@@ -48,8 +40,47 @@ class TweetsPanel < Thing
     @deny_keys = [ ]
     @confirm_text = ''
 
-    @redraw = true
     @time = 0
+
+    @title_panel = TitlePanel.new(@clients)
+    @title_panel.pos = 0,0
+    self << @title_panel
+
+    @tweets_panel = TweetsPanel.new(@tweetstore)
+    @tweets_panel.pos = 0,4
+    self << @tweets_panel
+
+    @detail_panel = DetailPanel.new(@config, @tweetstore)
+    @detail_panel.pos = 0, screen_height-10
+    self << @detail_panel
+
+    @post_panel = PostPanel.new
+    @post_panel.pos = 0, screen_height-7
+    self << @post_panel
+
+    @confirm_panel = ConfirmPanel.new
+    @confirm_panel.pos = 0, screen_height-5
+    self << @confirm_panel
+  end
+
+  def selected_tweet
+    @tweets_panel.selected_tweet
+  end
+
+  def selected_index
+    @tweets_panel.selected_index
+  end
+
+  def visible_tweets
+    @tweets_panel.visible_tweets
+  end
+
+  def top
+    @tweets_panel.top
+  end
+
+  def tweetview
+    @tweets_panel.tweetview
   end
 
   def tick(time)
@@ -61,20 +92,18 @@ class TweetsPanel < Thing
       case event
         when Twitter::Tweet
           # TODO: Deal with duplicates
-          # If the selection arrow is on the streaming spinner, then follow it
-          @selected += 1 if @selected == @tweetstore.size
           # If we can scroll down one tweet without the selection arrow
           # disappearing, then do so, but only if the view is full
-          @next_top += 1 if @selected > @next_top &&
-            @next_top + @world.height - START_Y + END_Y - 1 == @tweetstore.size
-          @tweetstore << TweetLine.new(self, @tweetstore, event, @time)
+          scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y - 1 == @tweetstore.size
+          @tweetstore << TweetLine.new(@tweets_panel, @tweetstore, event, @time)
+          # If the selection arrow was on the streaming spinner, then follow it
+          select_tweet(selected_index+1) if selected_index == @tweetstore.size-1
 
         when Twitter::Streaming::DeletedTweet
           @tweetstore.delete_id(event.id)
-          select_tweet(@selected)
-          # TODO: Instead of just shifting everything up, attempt to keep @selected on the same tweet
-          #       if possible
-          @redraw = true
+          # TODO: Instead of just shifting everything up, attempt to keep @selected on the same
+          #       tweet if possible
+          select_tweet(selected_index)
 
         when Twitter::Streaming::Event
           case event.name
@@ -84,6 +113,7 @@ class TweetsPanel < Thing
               nil
             when :favorite, :unfavorite
               # TODO: Somehow make this work for retweets (or just cry loudly or something)
+              # TODO: This still isn't working sometimes, why game pls
               index = @tweetstore.find_index { |tl| tl.tweet.id == event.target_object.id }
               if index and @tweetstore[index]
                 @tweetstore[index].tweet = event.target_object
@@ -107,344 +137,150 @@ class TweetsPanel < Thing
 
     # Consume inputs
     while true
-      input = @world.getch
+      input = world.getch
       break if input == -1
       case @mode
-      when :timeline
-        timeline_consume_input(input)
-      when :post
-        post_consume_input(input)
-      when :confirm
-        confirm_consume_input(input)
+        when :timeline
+          timeline_consume_input(input)
+        when :post
+          post_consume_input(input)
+        when :confirm
+          confirm_consume_input(input)
       end
     end
 
-    # Set selected tweetlines
-    @tweetstore[@prev_selected].select(false) if @tweetstore[@prev_selected]
-    @tweetstore[@selected].select if @tweetstore[@selected]
-
-    # Set relations on tweetlines
-    @tweetstore[@next_top, height].each do |tl|
-      tl.set_relations
-
-      if @tweetstore[@selected]
-        # Tweet by same user
-        if tl.tweet.user.id == @tweetstore[@selected].tweet.user.id
-          tl.set_relations(:same_user)
-        end
-
-        # Tweet in replied-to chain (highlight the most immediate replied-to)
-        if @tweetstore.reply_tree.size > 1 and @tweetstore.reply_tree.include?(tl)
-          if tl.tweet.user.id == @tweetstore[@selected].tweet.user.id
-            tl.set_relations(:reply_tree_same_user)
-          else
-            tl.set_relations(:reply_tree_other_user)
-          end
-        end
-      end
-    end
-
-    # Tick just tweetlines that are visible
-    @tweetstore[@next_top, height].each { |tl| tl.tick_to(@time) }
-  end
-
-  def draw
-    draw_timeline
-    draw_selection
-    draw_post
-    draw_confirm
-    draw_statusline
-    @world.flag_rerender
-  end
-
-  def render(*args)
-    y = START_Y
-    @tweetstore[@next_top, height].each do |tl|
-      tl.flag_rerender if @redraw
-      tl.render(y)
-      y += 1
-    end
-    @redraw = false
+    # Tick panels
+    @detail_panel.tweetline = selected_tweet
+    @post_panel.set_target(@post, @reply_to)
+    @confirm_panel.set_action(@confirm_action, @confirm_text)
+    super
   end
 
   def timeline_consume_input(input)
     if @header == 'z'
       case input
         when 't'.ord
-          scroll_top(@selected)
+          scroll_top(selected_index)
         when 'z'.ord
-          scroll_top(@selected-(height-1)/2)
+          scroll_top(selected_index-(@tweets_panel.size.y-1)/2)
         when 'b'.ord
-          scroll_top(@selected-height+1)
+          scroll_top(selected_index-@tweets_panel.size.y+1)
       end
       @header = ''
     else
       case input
-      # Mouse control
+        # Mouse control
 
-      when Ncurses::KEY_MOUSE
-        mouse_event = Ncurses::MEVENT.new
-        Ncurses::getmouse(mouse_event)
-        if mouse_event.bstate & Ncurses::BUTTON1_PRESSED != 0
-          select_tweet(@next_top + mouse_event.y-START_Y) if mouse_event.y >= START_Y and mouse_event.y < @world.height+END_Y
-        elsif mouse_event.bstate & Ncurses::BUTTON4_PRESSED != 0
-          scroll_top(@next_top-3)
-        elsif mouse_event.bstate & Ncurses::BUTTON2_PRESSED != 0 # or mouse_event.bstate & Ncurses::REPORT_MOUSE_POSITION != 0
-          scroll_top(@next_top+3)
-        end
-
-      # Keyboard control
-
-      # Movement commands
-      when 'k'.ord, 259 # up arrow
-        select_tweet(@selected-1)
-      when 'j'.ord, 258 # down arrow
-        select_tweet(@selected+1)
-
-      when 'H'.ord
-        select_tweet(@next_top)
-      when 'M'.ord
-        select_tweet(@next_top+(height-1)/2)
-      when 'L'.ord
-        select_tweet(@next_top+height-1)
-      when 'g'.ord
-        select_tweet(0)
-      when 'G'.ord
-        select_tweet(@tweetstore.size)
-
-      # TODO: Traverse all relations with this, not just the reply tree
-      when 'h'.ord, 'l'.ord, 260, 261 # left arrow, right arrow
-        if @tweetstore.reply_tree.size > 1
-          rt_index = @tweetstore.reply_tree.find_index { |tl| tl.tweet.id >= @tweetstore[@selected].tweet.id }
-          rt_index = [ 0, rt_index-1 ].max if [ 'h'.ord, 260  ].include?(input)
-          rt_index = [ rt_index+1, @tweetstore.reply_tree.size-1 ].min if [ 'l'.ord, 261 ].include?(input)
-          ts_index = @tweetstore.find_index { |tl| tl.tweet.id == @tweetstore.reply_tree[rt_index].tweet.id }
-          select_tweet(ts_index, false) if ts_index
-        end
-
-      # Scrolling commands
-      when 'z'.ord
-        @header = 'z'
-
-      # No confirmation commands
-      when 'f'.ord
-        # TODO: Favorite retweets correctly
-        return unless @tweetstore[@selected]
-        @clients.rest_api.favorite(@tweetstore[@selected].tweet.id)
-      when 'F'.ord
-        # TODO: Don't crash when the tweet is un-unfavoritable
-        return unless @tweetstore[@selected]
-        @clients.rest_api.unfavorite(@tweetstore[@selected].tweet.id)
-
-      # Switch to post-mode commands
-      when 't'.ord
-        @mode = :post
-        @reply_to = nil
-
-      when 'r'.ord, 'R'.ord
-        return unless @tweetstore[@selected] # Do nothing when following stream
-        @mode = :post
-
-        # When replying to a retweet, we reply to the retweeted status, not the status that is a retweet
-        reply_tweetline = @tweetstore[@selected]
-        @reply_to =
-          if reply_tweetline.retweet?
-            reply_tweetline.tweet.retweeted_status
-          else
-            reply_tweetline.tweet
+        when Ncurses::KEY_MOUSE
+          mouse_event = Ncurses::MEVENT.new
+          Ncurses::getmouse(mouse_event)
+          if mouse_event.bstate & Ncurses::BUTTON1_PRESSED != 0
+            select_tweet(top + mouse_event.y-@tweets_panel.pos.y) if mouse_event.y >= @tweets_panel.pos.y && mouse_event.y < @tweets_panel.size.y+@tweets_panel.pos.y
+          elsif mouse_event.bstate & Ncurses::BUTTON4_PRESSED != 0
+            scroll_top(top-3)
+          elsif mouse_event.bstate & Ncurses::BUTTON2_PRESSED != 0 # or mouse_event.bstate & Ncurses::REPORT_MOUSE_POSITION != 0
+            scroll_top(top+3)
           end
 
-        # Populate the tweet with the @names of people being replied to
-        if input == 'R'.ord # Also include @names of every person mentioned in the tweet
-          mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(@reply_to.text)
-          mentioned_users = mentioned_users.uniq
-          mentioned_users.delete(@reply_to.user.screen_name)
-          mentioned_users.unshift(@reply_to.user.screen_name)
-          mentioned_users.delete(@clients.user.screen_name)
-          mentioned_users << reply_tweetline.tweet.user.screen_name if reply_tweetline.retweet?
-          mentioned_users.map! { |u| "@#{u}" }
-          @post = "#{mentioned_users.join(' ')} "
-        elsif input == 'r'.ord # Only have @name of the user of the tweet
-          @post = "@#{@reply_to.user.screen_name} "
-        end
+        # Keyboard control
 
-      # Switch to confirm-mode commands
-      when 'e'.ord
-        return unless @tweetstore[@selected] # Do nothing when following stream
-        @mode = :confirm
-        @confirm_action = :retweet
-        @confirm_keys = [ 'y'.ord, 'Y'.ord, 'e'.ord, '\r'.ord ]
-        @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
-        @confirm_text = 'Really retweet this tweet? eyY/nN'
+        # Movement commands
+        when 'k'.ord, 259 # up arrow
+          select_tweet(selected_index-1)
+        when 'j'.ord, 258 # down arrow
+          select_tweet(selected_index+1)
 
-      when 'd'.ord
-        return unless @tweetstore[@selected] # Do nothing when following stream
-        return unless @tweetstore[@selected].tweet.user.id == @clients.user.id # Must be own tweet
-        @mode = :confirm
-        @confirm_action = :delete
-        @confirm_keys = [ 'y'.ord, 'Y'.ord, 'd'.ord, '\r'.ord ]
-        @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
-        @confirm_text = 'Really delete this tweet? dyY/nN'
+        when 'H'.ord
+          select_tweet(top)
+        when 'M'.ord
+          select_tweet(top+(visible_tweets.size-1)/2)
+        when 'L'.ord
+          select_tweet(top+visible_tweets.size-1)
+        when 'g'.ord
+          select_tweet(0)
+        when 'G'.ord
+          select_tweet(tweetview.size-1)
 
-      # Other commands
-      when 'Q'.ord
-        @world.quit
+        # TODO: Traverse all relations with this, not just the reply tree
+        when 'h'.ord, 'l'.ord, 260, 261 # left arrow, right arrow
+          if @tweetstore.reply_tree.size > 1 and selected_tweet.is_tweet?
+            rt_index = @tweetstore.reply_tree.find_index { |tl| tl.tweet.id >= selected_tweet.tweet.id }
+            rt_index = [ 0, rt_index-1 ].max if [ 'h'.ord, 260  ].include?(input)
+            rt_index = [ rt_index+1, @tweetstore.reply_tree.size-1 ].min if [ 'l'.ord, 261 ].include?(input)
+            ts_index = @tweetstore.find_index { |tl| tl.tweet.id == @tweetstore.reply_tree[rt_index].tweet.id }
+            select_tweet(ts_index, false) if ts_index
+          end
+
+        # Scrolling commands
+        when 'z'.ord
+          @header = 'z'
+
+        # No confirmation commands
+        when 'f'.ord
+          # TODO: Favorite retweets correctly
+          return unless selected_tweet.is_tweet?
+          @clients.rest_api.favorite(selected_tweet.tweet.id)
+        when 'F'.ord
+          # TODO: Don't crash when the tweet is un-unfavoritable
+          return unless selected_tweet.is_tweet?
+          @clients.rest_api.unfavorite(selected_tweet.tweet.id)
+
+        # Switch to post-mode commands
+        when 't'.ord
+          switch_mode(:post)
+          @reply_to = nil
+
+        when 'r'.ord, 'R'.ord
+          return unless selected_tweet.is_tweet? # Do nothing when following stream
+          switch_mode(:post)
+
+          # When replying to a retweet, we reply to the retweeted status, not the status that is a retweet
+          reply_tweetline = selected_tweet
+          @reply_to =
+              if reply_tweetline.retweet?
+                reply_tweetline.tweet.retweeted_status
+              else
+                reply_tweetline.tweet
+              end
+
+          # Populate the tweet with the @names of people being replied to
+          if input == 'R'.ord # Also include @names of every person mentioned in the tweet
+            mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(@reply_to.text)
+            mentioned_users = mentioned_users.uniq
+            mentioned_users.delete(@reply_to.user.screen_name)
+            mentioned_users.unshift(@reply_to.user.screen_name)
+            mentioned_users.delete(@clients.user.screen_name)
+            mentioned_users << reply_tweetline.tweet.user.screen_name if reply_tweetline.retweet?
+            mentioned_users.map! { |u| "@#{u}" }
+            @post = "#{mentioned_users.join(' ')} "
+          elsif input == 'r'.ord # Only have @name of the user of the tweet
+            @post = "@#{@reply_to.user.screen_name} "
+          end
+
+        # Switch to confirm-mode commands
+        when 'e'.ord
+          return unless selected_tweet.is_tweet? # Do nothing when following stream
+          switch_mode(:confirm)
+          @confirm_action = :retweet
+          @confirm_keys = [ 'y'.ord, 'Y'.ord, 'e'.ord, '\r'.ord ]
+          @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
+          @confirm_text = 'Really retweet this tweet? eyY/nN'
+
+        when 'd'.ord
+          return unless selected_tweet.is_tweet? # Do nothing when following stream
+          return unless selected_tweet.tweet.user.id == @clients.user.id # Must be own tweet
+          switch_mode(:confirm)
+          @confirm_action = :delete
+          @confirm_keys = [ 'y'.ord, 'Y'.ord, 'd'.ord, '\r'.ord ]
+          @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
+          @confirm_text = 'Really delete this tweet? dyY/nN'
+
+        # Other commands
+        when 'Q'.ord
+          world.quit
 
       end
     end
-  end
-
-  def draw_timeline
-    return if @tweetstore.size == 0
-
-    # Figure out which index is the topmost tweet to display
-    # TODO: Fix the extraordinarily confusing naming scheme here (some of these refer to y-positions
-    #       and others refer to indices into @tweetstore...)
-    height = @world.height - START_Y + END_Y
-    bottom = @world.height + END_Y
-    top = @next_top
-
-    # If top changed, then every tweet needs to be redrawn
-    @redraw = true if @prev_top != top
-
-    # Draw the top bar
-    if @redraw
-      @world.erase
-      @prev_top = top
-      @next_top = top
-
-      @world.color(0,1,1,0, :bold, :reverse)
-      @world.write(3, 1, ' TIMELINE ')
-
-      user = " CURRENT USER: @#{@clients.user.screen_name} "
-      @world.color(0,1,1,0, :bold, :reverse)
-      @world.write(@world.width - user.length - 2, 1, user)
-
-      @world.color(0,1,1,1, :bold, :reverse)
-      @world.write(0, 2, ''.ljust(@world.width))
-      @world.write(ColumnDefinitions::COLUMNS[:UsernameColumn], 2, 'USER')
-      @world.write(ColumnDefinitions::COLUMNS[:TweetColumn], 2, 'TWEET')
-    end
-
-    # Draw tweets; internally they will only redraw if they find a change
-    i = START_Y
-    @tweetstore[top, height].each_index do |index|
-      index += top
-      tweet = @tweetstore[index]
-      tweet.draw(selected: index == @selected)
-      i += 1
-    end
-
-    # Clear/draw selection dots
-    # TODO: Fix bug where @selected line's dots fuck up the text appearing like the streamer would
-    if @tweetstore[@prev_selected] and (top..top+height).include? @prev_selected
-      @world.color(0)
-      @world.write(0, @prev_selected-(top-START_Y), ''.ljust(@world.width))
-    end
-    if @tweetstore[@selected]
-      @world.color(0,0,0,1, :dim)
-      @world.write(0, @selected-(top-START_Y), ''.ljust(@world.width-3, '·'))
-    end
-
-    # Draw the 'Streaming... /' spinner
-    # TODO: Probably the solution here is to have a special kind of tweetline?
-    if i < bottom
-      @world.color(0,0,0,1)
-      @world.write(ColumnDefinitions::COLUMNS[:SelectionColumn], i, '   ') # Clear the selection arrow
-      @world.write(ColumnDefinitions::COLUMNS[:TweetColumn], i, 'Streaming...')
-      @world.write(ColumnDefinitions::COLUMNS[:TweetColumn]+13, i, %w[– \\ | /][(@time/3)%4])
-      if @selected == top+i-START_Y
-        @world.color(1,1,1,1, :bold)
-        @world.write(ColumnDefinitions::COLUMNS[:SelectionColumn], i, '  >')
-      end
-    end
-
-    # Draw scrollbar
-    @world.color(0,0,0,1)
-    (START_Y...bottom).each { |y| @world.write(@world.width-2, y, '|') }
-
-    top_end = ((height-1) * (top.to_f / @tweetstore.size)).floor + START_Y
-    bottom_end = ((height-1) * [ (top+height).to_f / @tweetstore.size, 1.0 ].min).ceil + START_Y
-    @world.color(1,1,1,1)
-    @world.bold
-    @world.write(@world.width-2, top_end, 'o')
-    (top_end+1..bottom_end-1).each { |y| @world.write(@world.width-2, y, '|') }
-    @world.write(@world.width-2, bottom_end, 'o')
-  end
-
-  def draw_selection
-    @statusline = ''
-    return unless @redraw or @prev_selected != @selected
-
-    @statusline = 'redraw'
-    @prev_selected = @selected
-
-    y = @world.height + SELECTION_START_Y
-
-    # Clear the selection area
-    @world.color(0)
-    @world.write(0, y, ''.ljust(4 * @world.width))
-    @world.write(0, y+2, ''.ljust(2 * @world.width))
-
-    return unless @tweetstore[@selected]
-    tweetline = @tweetstore[@selected]
-
-    # Draw the infobar
-    @world.color(0,0,0,1, :bold, :reverse)
-    @world.write(0, y, ''.ljust(@world.width))
-
-    if tweetline.retweet?
-
-      xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
-      name = "@#{tweetline.tweet.retweeted_status.user.screen_name}"
-      profile_image = @tweetstore.get_profile_image(tweetline.tweet.retweeted_status.user)
-      UsernameColumn.draw_username(@world, xPos, y, name, profile_image, :bold)
-      @world.color(0)
-      @world.write(xPos-1, y, ' ')
-      xPos += name.length
-
-      @world.color(0,5,0, :bold)
-      @world.write(xPos, y, ' << ')
-      xPos += 4
-
-      name = "@#{tweetline.tweet.user.screen_name}"
-      profile_image = @tweetstore.get_profile_image(tweetline.tweet.user)
-      UsernameColumn.draw_username(@world, xPos, y, name, profile_image, :bold)
-      @world.color(0)
-      @world.write(xPos+name.length, y, ' ')
-    else
-      name = "@#{tweetline.tweet.user.screen_name}"
-      profile_image = @tweetstore.get_profile_image(tweetline.tweet.user)
-      @world.color(0)
-      @world.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, y, ''.ljust(name.length+2))
-      UsernameColumn.draw_username(@world, ColumnDefinitions::COLUMNS[:UsernameColumn], y, name, profile_image, :bold)
-    end
-
-    time = tweetline.tweet.created_at.getlocal.strftime " %Y-%m-%d %H:%M:%S "
-    @world.color(1,1,1,1)
-    @world.write(@world.width-time.length-1, y, time)
-
-    xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
-    yPos = y+2
-    tweetline.tweet_pieces.each do |piece|
-      color_code = @tweetstore.config.tweet_colors_detail(piece.type)
-      case color_code[0]
-        when :none
-          nil
-        when :username
-          name = piece.text
-          profile_image = @tweetstore.get_profile_image(piece.entity)
-          UsernameColumn.draw_username(@world, xPos, yPos, name, profile_image, *color_code[1..-1])
-          xPos += piece.text_width
-        when :whitespace
-          nil
-        else
-          @world.color(*color_code)
-          @world.write(xPos, yPos, piece.text)
-          xPos += piece.text_width
-      end
-    end
-
   end
 
   def post_consume_input(input)
@@ -457,7 +293,7 @@ class TweetsPanel < Thing
       when 27
         # Exit post mode
         @post = ''
-        @mode = :timeline
+        switch_mode(:timeline)
 
       # Backspace
       when 127
@@ -469,7 +305,7 @@ class TweetsPanel < Thing
         # Post the tweet
         post_tweet
         @post = ''
-        @mode = :timeline
+        switch_mode(:timeline)
 
       when Ncurses::KEY_MOUSE
         mouse_event = Ncurses::MEVENT.new
@@ -479,53 +315,52 @@ class TweetsPanel < Thing
       else
         # Every other input is just a character in the post
         @post += input.chr(Encoding::UTF_8)
-        #@post += input.to_s
+      #@post += input.to_s
     end
   end
 
-  def draw_post
-    y = @world.height + POST_START_Y
-
-    # Clear the post area
-    @world.color(0)
-    @world.write(0, y, ''.ljust(@world.width))
-    @world.write(0, y+2, ''.ljust(@world.width))
-    @world.write(0, y+4, ''.ljust(2 * @world.width))
-
-    if @mode == :post
-      # Render status bar
-      r,g,b = @reply_to ? [5,4,2] : [2,4,5]
-      glow = 0.75 + 0.25*Math.sin(@time/20.0)
-      gr,gg,gb = [r,g,b].map { |f| (f*glow).round }
-
-      @world.color(gr,gg,gb, :reverse)
-      @world.write(0, y+2, ''.ljust(@world.width))
-
-      # TODO More correct update length checking based on shortened URL, etc.
-      tweet_length = @post.length
-      tweet_length_display = ' ' + tweet_length.to_s + ' / 140 '
-      display_width = UnicodeUtils.display_width(tweet_length_display)
-      if tweet_length > 140
-        @world.color(5,0,0, :reverse)
-      else
-        @world.color(r,g,b, :reverse)
+  def confirm_consume_input(input)
+    if @confirm_keys.include?(input)
+      case @confirm_action
+        when :retweet
+          @clients.rest_api.retweet(selected_tweet.tweet.id)
+          switch_mode(:timeline)
+        when :delete
+          @clients.rest_api.destroy_status(selected_tweet.tweet.id)
+          switch_mode(:timeline)
       end
-      @world.write(@world.width-display_width-1, y+2, tweet_length_display)
-
-      if @reply_to
-        @world.color(gr,gg,gb, :bold)
-        @world.write((@world.width-5)/2, y, 'v v v')
-      end
-
-      @world.color(r,g,b, :bold, :reverse)
-      @world.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, y+2, @reply_to ? ' COMPOSE REPLY ' : ' COMPOSE UPDATE ')
-
-      # Render the post
-      @world.color(1,1,1,1)
-      @world.write(ColumnDefinitions::COLUMNS[:UsernameColumn], y+4, @post)
-      @world.bold
-      @world.write(ColumnDefinitions::COLUMNS[:SelectionColumn], y+4, '  >')
+    elsif @deny_keys.include?(input)
+      switch_mode(:timeline)
     end
+  end
+
+  def render
+    super
+    world.rerender
+  end
+
+  private
+
+  def switch_mode(mode)
+    @mode = mode
+    case mode
+      when :timeline
+        @post_panel.visible = false
+        @confirm_panel.visible = false
+        @detail_panel.flag_rerender
+      when :post
+        @post_panel.visible = true
+      when :confirm
+        @confirm_panel.visible = true
+    end
+  end
+
+  def select_tweet(index, rebuild = true)
+    @tweets_panel.select_tweet(index, rebuild)
+  end
+
+  def scroll_top(index)
+    @tweets_panel.scroll_top(index)
   end
 
   def post_tweet
@@ -544,76 +379,429 @@ class TweetsPanel < Thing
     end
   end
 
-  def confirm_consume_input(input)
-    if @confirm_keys.include?(input)
-      case @confirm_action
-      when :retweet
-        @clients.rest_api.retweet(@tweetstore[@selected].tweet.id)
-        @mode = :timeline
-      when :delete
-        @clients.rest_api.destroy_status(@tweetstore[@selected].tweet.id)
-        @mode = :timeline
-      end
-    elsif @deny_keys.include?(input)
-      @mode = :timeline
-    end
+end
+
+class TweetsPanel < Thing
+
+  include HasPad
+  include PadHelpers
+
+  def initialize(tweetstore)
+    super()
+    self.size = screen_width, screen_height-15
+
+    @tweetstore = tweetstore
+    @tweetview = @tweetstore.create_view(self)
+
+    @prev_top = -1
+    @next_top = 0
+    @prev_selected = 0
+    @selected = 0
+    @prev_visible_tweets = []
+    @prev_last_visible_y = -1
+
+    @time = 0
+
+    new_pad(size.x, size.y)
   end
 
-  def draw_confirm
-    return unless @mode == :confirm
-
-    y = @world.height + CONFIRM_START_Y
-
-    # Clear the area
-    @world.color(0)
-    @world.write(0, y, ''.ljust(@world.width))
-    @world.write(0, y+2, ''.ljust(@world.width))
-    
-    r,g,b =
-      case @confirm_action
-      when :retweet
-        [0,5,0]
-      when :delete
-        [5,0,0]
-      end
-    glow = 0.5 + 0.5*Math.sin(@time/20.0)
-    gr,gg,gb = [r,g,b].map { |f| (f*glow).round }
-
-    @world.color(gr,gg,gb, :bold)
-    @world.write((@world.width-5)/2, y, 'v v v')
-
-    @world.color(gr,gg,gb, :reverse)
-    @world.write(0, y+2, ''.ljust(@world.width))
-
-    @world.color(r,g,b, :bold, :reverse)
-    @world.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, y+2, " #{@confirm_text} ")
+  def selected_tweet
+    @tweetview[@selected]
   end
 
-  def draw_statusline
-    @world.color(1,1,1,1)
-    @world.write(0, @world.height-1, @statusline)
-    @world.write(@world.width-1, @world.height-1, @header.ljust(1))
+  def selected_index
+    @selected
   end
 
-  private
+  def visible_tweets
+    @tweetview[@next_top, size.y]
+  end
+
+  def top
+    @next_top
+  end
+
+  def tweetview
+    @tweetview
+  end
 
   def select_tweet(index, rebuild = true)
-    @selected = [ 0, [ index, @tweetstore.size ].min ].max
+    @selected = [ 0, [ index, @tweetview.size-1 ].min ].max
     if @selected < @next_top
       scroll_top(@selected)
-    elsif @selected >= @next_top + height
-      scroll_top(@selected - height + 1)
+    elsif @selected >= @next_top + size.y
+      scroll_top(@selected - size.y + 1)
     end
-    @tweetstore.rebuild_reply_tree(@tweetstore[@selected]) if @tweetstore[@selected] and rebuild
+    @tweetstore.rebuild_reply_tree(selected_tweet) if selected_tweet.is_tweet? and rebuild
   end
 
   def scroll_top(index)
-    @next_top = [ 0, [ index, @tweetstore.size ].min ].max
-    if @selected >= @next_top + height
-      select_tweet(@next_top + height - 1)
+    @next_top = [ 0, [ index, @tweetview.size-1 ].min ].max
+    if @selected >= @next_top + size.y
+      select_tweet(@next_top + size.y - 1)
     elsif @selected < @next_top
       select_tweet(@next_top)
     end
+  end
+
+  def tick(time)
+    # Set selected tweetlines
+    if @prev_selected != @selected
+      @tweetview[@prev_selected].select(false) if @tweetview[@prev_selected]
+      selected_tweet.select
+    end
+
+    # Set relations on tweetlines
+    visible_tweets.each do |tl|
+      if tl.is_tweet?
+        tl.set_relations
+
+        if selected_tweet.is_tweet?
+          # Tweet by same user
+          if tl.tweet.user.id == selected_tweet.tweet.user.id
+            tl.set_relations(:same_user)
+          end
+
+          # Tweet in replied-to chain (highlight the most immediate replied-to)
+          if @tweetstore.reply_tree.size > 1 and @tweetstore.reply_tree.include?(tl)
+            if tl.tweet.user.id == selected_tweet.tweet.user.id
+              tl.set_relations(:reply_tree_same_user)
+            else
+              tl.set_relations(:reply_tree_other_user)
+            end
+          end
+        end
+      end
+    end
+
+    # Tick and position the tweetlines that are visible
+    visible_tweets.each.with_index do |tl, i|
+      tl.pos.y = i
+      tl.tick_to(@time, time)
+    end
+
+    flag_redraw if @prev_top != @next_top
+
+    @prev_top = @next_top
+    @prev_selected = @selected
+
+    @time += time
+  end
+
+  def draw
+    super
+    visible_tweets.each { |tl| tl.draw }
+  end
+
+  def redraw
+    pad.erase
+
+    # Draw scrollbar
+    return if @tweetview.size == 0
+
+    pad.color(0,0,0,1)
+    (0...size.y).each { |y| pad.write(size.x-2, y, '|') }
+
+    top_end = ((size.y-1) * (@next_top.to_f / @tweetview.size)).floor
+    bottom_end = ((size.y-1) * [ (@next_top+size.y).to_f / @tweetview.size, 1.0 ].min).ceil
+    pad.color(1,1,1,1)
+    pad.bold
+    pad.write(size.x-2, top_end, 'o')
+    (top_end+1..bottom_end-1).each { |y| pad.write(size.x-2, y, '|') }
+    pad.write(size.x-2, bottom_end, 'o')
+  end
+
+  def render
+    super
+
+    last_visible_y = -1
+    visible_tweets.each.with_index do |tl, i|
+      tl.flag_rerender if @prev_visible_tweets[i] != tl
+      tl.render
+      last_visible_y = tl.pos.y
+    end
+    if @prev_last_visible_y > last_visible_y
+      rerender_pad(Coord.new(0, last_visible_y+1), Coord.new(size.x-3, @prev_last_visible_y-last_visible_y))
+    end
+
+    @prev_visible_tweets = visible_tweets
+    @prev_last_visible_y = last_visible_y
+  end
+
+  def rerender
+    rerender_pad(Coord.new(size.x-3, 0), Coord.new(3, size.y))
+  end
+
+  def draw_statusline
+    pad.color(1,1,1,1)
+    pad.write(0, height-1, @statusline)
+    pad.write(width-1, height-1, @header.ljust(1))
+  end
+
+end
+
+class TitlePanel < Thing
+
+  include HasPad
+  include PadHelpers
+
+  def initialize(clients)
+    super()
+    self.size = screen_width, 4
+    @clients = clients
+    new_pad(screen_width, 4)
+  end
+
+  def redraw
+    pad.erase
+
+    pad.color(0,1,1,0, :bold, :reverse)
+    pad.write(3, 1, ' TIMELINE ')
+
+    user = " CURRENT USER: @#{@clients.user.screen_name} "
+    pad.color(0,1,1,0, :bold, :reverse)
+    pad.write(size.x - user.length - 3, 1, user)
+
+    pad.color(0,1,1,1, :bold, :reverse)
+    pad.write(0, 2, ''.ljust(size.x))
+    pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn], 2, 'USER')
+    pad.write(ColumnDefinitions::COLUMNS[:TweetColumn], 2, 'TWEET')
+  end
+
+  def rerender
+    rerender_pad
+  end
+
+end
+
+class DetailPanel < Thing
+
+  include HasPad
+  include PadHelpers
+  include ProfileImageWatcher
+
+  attr_accessor :tweetline
+
+  def initialize(config, tweetstore)
+    super()
+    self.size = screen_width, 9
+    @config = config
+    new_pad(screen_width+1, 10)
+    watch_store(tweetstore)
+  end
+
+  def tick(time)
+    if @tweetline != @prev_tweetline or any_profile_image_changed?
+      @prev_tweetline = @tweetline
+      flag_redraw
+    end
+  end
+
+  def redraw
+    pad.erase
+    stop_watching_all_profile_images
+
+    # Draw the infobar
+    pad.color(0,0,0,1, :bold, :reverse)
+    pad.write(0, 0, ''.ljust(size.x))
+
+    unless @tweetline.is_tweet?
+      text = ' NO TWEET SELECTED '
+      xPos = (size.x - text.size) / 2
+      pad.color(0,0,0,1, :reverse)
+      pad.write(xPos, 0, text)
+      return
+    end
+
+    if @tweetline.retweet?
+      xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
+      name = "@#{@tweetline.tweet.retweeted_status.user.screen_name}"
+      profile_image = get_and_watch_profile_image(@tweetline.tweet.retweeted_status.user)
+      UsernameColumn.draw_username(pad, xPos, 0, name, profile_image, :bold)
+      pad.color(0)
+      pad.write(xPos-1, 0, ' ')
+      xPos += name.length
+
+      pad.color(0,5,0, :bold)
+      pad.write(xPos, 0, ' << ')
+      xPos += 4
+
+      name = "@#{@tweetline.tweet.user.screen_name}"
+      profile_image = get_and_watch_profile_image(@tweetline.tweet.user)
+      UsernameColumn.draw_username(pad, xPos, 0, name, profile_image, :bold)
+      pad.color(0)
+      pad.write(xPos+name.length, 0, ' ')
+    else
+      name = "@#{@tweetline.tweet.user.screen_name}"
+      profile_image = get_and_watch_profile_image(@tweetline.tweet.user)
+      pad.color(0)
+      pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, 0, ''.ljust(name.length+2))
+      UsernameColumn.draw_username(pad, ColumnDefinitions::COLUMNS[:UsernameColumn], 0, name, profile_image, :bold)
+    end
+
+    time = @tweetline.tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
+    pad.color(1,1,1,1)
+    pad.write(size.x-time.length-1, 0, time)
+
+    xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
+    yPos = 2
+    @tweetline.tweet_pieces.each do |piece|
+      color_code = @config.tweet_colors_detail(piece.type)
+      case color_code[0]
+        when :none
+          nil
+        when :username
+          name = piece.text
+          profile_image = get_and_watch_profile_image(piece.entity)
+          UsernameColumn.draw_username(pad, xPos, yPos, name, profile_image, *color_code[1..-1])
+          xPos += piece.text_width
+        when :whitespace
+          pad.color(*color_code[1..-1])
+          if piece.entity.data == :tab
+            xPos += 2
+          end
+          pad.write(xPos, yPos, piece.text)
+          if piece.entity.data == :newline
+            xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
+            yPos += 1
+          end
+        else
+          pad.color(*color_code)
+          pad.write(xPos, yPos, piece.text)
+          xPos += piece.text_width
+      end
+    end
+
+  end
+
+  def rerender
+    rerender_pad
+  end
+
+  def on_resize(old_size, new_size)
+    flag_redraw
+  end
+
+end
+
+class PostPanel < Thing
+
+  include HasPad
+  include PadHelpers
+
+  def initialize
+    super
+    self.size = screen_width, 6
+    self.visible = false
+    @time = 0
+    new_pad(screen_width, 6)
+  end
+
+  def set_target(post, reply_to)
+    @post = post
+    @reply_to = reply_to
+  end
+
+  def tick(time)
+    flag_redraw if size.y > 0
+    @time += time
+  end
+
+  def redraw
+    pad.erase
+
+    # Render status bar
+    r,g,b = @reply_to ? [5,4,2] : [2,4,5]
+    glow = 0.75 + 0.25*Math.sin(@time/20.0)
+    gr,gg,gb = [r,g,b].map { |f| (f*glow).round }
+
+    pad.color(gr,gg,gb, :reverse)
+    pad.write(0, 3, ''.ljust(size.x))
+
+    # TODO More correct update length checking based on shortened URL, etc.
+    tweet_length = @post.length
+    tweet_length_display = ' ' + tweet_length.to_s + ' / 140 '
+    display_width = UnicodeUtils.display_width(tweet_length_display)
+    if tweet_length > 140
+      pad.color(5,0,0, :reverse)
+    else
+      pad.color(r,g,b, :reverse)
+    end
+    pad.write(size.x-display_width-1, 3, tweet_length_display)
+
+    if @reply_to
+      pad.color(r,g,b, :bold)
+      pad.write((size.x-5)/2, 1, 'v v v')
+    end
+
+    pad.color(r,g,b, :bold, :reverse)
+    pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, 3, @reply_to ? ' COMPOSE REPLY ' : ' COMPOSE UPDATE ')
+
+    # Render the post
+    pad.color(1,1,1,1)
+    pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn], 5, @post)
+    pad.bold
+    pad.write(ColumnDefinitions::COLUMNS[:SelectionColumn], 5, '  >')
+  end
+
+  def rerender
+    if @reply_to
+      rerender_pad
+    else
+      rerender_pad(Coord.new(0, 2), Coord.new(size.x, size.y-2))
+    end
+  end
+
+end
+
+class ConfirmPanel < Thing
+
+  include HasPad
+  include PadHelpers
+
+  def initialize
+    super
+    self.size = screen_width, 4
+    self.visible = false
+    @time = 0
+    new_pad(screen_width, 4)
+  end
+
+  def set_action(action_type, action_text)
+    @action_type = action_type
+    @action_text = action_text
+  end
+
+  def tick(time)
+    flag_redraw(size.y > 0)
+    @time += time
+  end
+
+  def redraw
+    pad.erase
+
+    r,g,b =
+        case @action_type
+          when :retweet
+            [0,5,0]
+          when :delete
+            [5,0,0]
+        end
+    glow = 0.5 + 0.5*Math.sin(@time/20.0)
+    gr,gg,gb = [r,g,b].map { |f| (f*glow).round }
+
+    pad.color(r,g,b, :bold)
+    pad.write((size.x-5)/2, 1, 'v v v')
+
+    pad.color(gr,gg,gb, :reverse)
+    pad.write(0, 3, ''.ljust(size.x))
+
+    pad.color(r,g,b, :bold, :reverse)
+    pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, 3, " #{@action_text} ")
+  end
+
+  def rerender
+    rerender_pad
   end
 
 end

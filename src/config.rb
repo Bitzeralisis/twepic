@@ -33,7 +33,7 @@ class Config
         text_not_friend:  [1,1,1,1],
         text_own_tweet:   [1,1,1,1],
         text_retweet:     [1,1,1,1],
-        whitespace:       [:whitespace],
+        whitespace:       [:whitespace, 0,0,0,1],
       },
     }
   end

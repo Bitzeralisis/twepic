@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'htmlentities'
+require 'logger'
 require 'twitter'
 require 'twitter_oauth'
 require_relative 'auth'
@@ -68,16 +69,17 @@ module TwepicRc
 end
 
 def main
+  $logger = Logger.new('log.log')
   $htmlentities = HTMLEntities.new
 
   clients = TwepicRc::make_clients
-  panel = TweetsPanel.new(clients, Config.new)
 
   world = World.new
-  world << panel
-  clients.start_streaming
-
-  world.run
+  world.run do
+    panel = PanelSet.new(clients, Config.new)
+    world << panel
+    clients.start_streaming
+  end
 end
 
 main

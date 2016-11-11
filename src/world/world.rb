@@ -13,10 +13,10 @@ class World < ThingContainer
   include HasWindow
 
   def initialize
-    @things = []
+    super
+    @parent = nil
+    @world = self
     @quit = false
-
-    self.world = self
   end
 
   def run
@@ -45,13 +45,26 @@ class World < ThingContainer
 
       @curses_window = Ncurses.stdscr
 
+      yield
+
       # Loop forever
+      count = 0
       skip = false
       until @quit
         start = Time.now.to_f
+
+        if count == 0
+          $logger.debug("60 frames | draws: #{$draws} | renders: #{$renders} | ticks: >#{$ticks}")
+          count = 60
+          $ticks = 1
+          $draws = 0
+          $renders = 0
+        end
+        count -= 1
+
         tick(1)
         draw #unless skip
-        render(0, 0, screen_width, screen_height) #unless skip
+        render #unless skip
         len = Time.now.to_f - start
         sleep 0.016-len if len < 0.016 # Update no more than 60 times a second
         skip = len > 0.016 # If the last tick too long then skip the next draw
@@ -66,9 +79,19 @@ class World < ThingContainer
     end
   end
 
-  def rerender(*args)
+  def global_pos
+    Coord.new
+  end
+
+  def rerender
+    super
     Ncurses.doupdate
     Ncurses.stdscr.noutrefresh
+  end
+
+  def flag_rerender
+    super
+    Ncurses.erase
   end
 
   def quit
