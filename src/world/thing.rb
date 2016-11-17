@@ -5,6 +5,12 @@ class Coord
   def initialize(x = 0, y = 0)
     @x, @y = x, y
   end
+  def ==(rhs)
+    x == rhs.x and y == rhs.y
+  end
+  def !=(rhs)
+    not self.==(rhs)
+  end
   def +(rhs)
     Coord.new(x+rhs.x, y+rhs.y)
   end

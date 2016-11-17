@@ -163,8 +163,8 @@ class TweetView
     @tweets.delete_if { |t| yield(t) }
   end
 
-  def each(*args)
-    @tweets.each(*args)
+  def each
+    @tweets.each { |t| yield(t) }
   end
 
   def size

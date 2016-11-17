@@ -19,7 +19,6 @@ class PanelSet < ThingContainer
 
   def initialize(clients, config)
     super()
-    self.size = screen_width, screen_height
 
     @clients = clients
     @config = config
@@ -43,23 +42,15 @@ class PanelSet < ThingContainer
     @time = 0
 
     @title_panel = TitlePanel.new(@clients)
-    @title_panel.pos = 0,0
-    self << @title_panel
-
     @tweets_panel = TweetsPanel.new(@tweetstore)
-    @tweets_panel.pos = 0,4
-    self << @tweets_panel
-
     @detail_panel = DetailPanel.new(@config, @tweetstore)
-    @detail_panel.pos = 0, screen_height-10
-    self << @detail_panel
-
     @post_panel = PostPanel.new
-    @post_panel.pos = 0, screen_height-7
-    self << @post_panel
-
     @confirm_panel = ConfirmPanel.new
-    @confirm_panel.pos = 0, screen_height-5
+
+    self << @title_panel
+    self << @tweets_panel
+    self << @detail_panel
+    self << @post_panel
     self << @confirm_panel
   end
 
@@ -92,6 +83,9 @@ class PanelSet < ThingContainer
       case event
         when Twitter::Tweet
           # TODO: Deal with duplicates
+          # TODO: When it's a retweet of your own tweet, carry over fav and rt count from orig tweet
+          # TODO: When it's a retweet of your own tweet, increment your tweet's rt count
+          #       and the rt count of every rt of that tweet.
           # If we can scroll down one tweet without the selection arrow
           # disappearing, then do so, but only if the view is full
           scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y - 1 == @tweetstore.size
@@ -112,14 +106,15 @@ class PanelSet < ThingContainer
             when :block, :unblock
               nil
             when :favorite, :unfavorite
-              # TODO: Somehow make this work for retweets (or just cry loudly or something)
-              # TODO: This still isn't working sometimes, why game pls
-              index = @tweetstore.find_index { |tl| tl.tweet.id == event.target_object.id }
-              if index and @tweetstore[index]
-                @tweetstore[index].tweet = event.target_object
-                if event.source.id == @clients.user.id
-                  @tweetstore[index].favorited = true if event.name == :favorite
-                  @tweetstore[index].favorited = false if event.name == :unfavorite
+              # TODO: Also change favorited/favorites of all rts of that tweet
+              tweetline = @tweetstore.fetch(event.target_object.id)
+              if tweetline
+                if event.target_object.user.id == @clients.user.id
+                  tweetline.favorites += 1 if event.name == :favorite
+                  tweetline.favorites -= 1 if event.name == :unfavorite
+                else
+                  tweetline.favorited = true if event.name == :favorite
+                  tweetline.favorited = false if event.name == :unfavorite
                 end
               end
             when :follow, :unfollow
@@ -153,6 +148,9 @@ class PanelSet < ThingContainer
     @detail_panel.tweetline = selected_tweet
     @post_panel.set_target(@post, @reply_to)
     @confirm_panel.set_action(@confirm_action, @confirm_text)
+
+    self.size = screen_width, screen_height
+
     super
   end
 
@@ -367,7 +365,6 @@ class PanelSet < ThingContainer
     # The first at-mention in the tweet must match the user being replied to,
     # otherwise don't count it as a reply
     # TODO Make it check the first at-mention, not just any at-mention
-    # TODO Make it not care if you're replying to yourself
     if @reply_to and @reply_to.user != @clients.user and !@post.include?("@#{@reply_to.user.screen_name}")
       @reply_to = nil
     end
@@ -377,6 +374,21 @@ class PanelSet < ThingContainer
     else
       @clients.rest_api.update(@post)
     end
+  end
+
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    @title_panel.pos = 0,0
+    @tweets_panel.pos = 0,4
+    @detail_panel.pos = 0, new_size.y-10
+    @post_panel.pos = 0, new_size.y-7
+    @confirm_panel.pos = 0, new_size.y-5
+    @title_panel.size = new_size.x, @title_panel.size.y
+    @tweets_panel.size = new_size.x, new_size.y-15
+    @detail_panel.size = new_size.x, @detail_panel.size.y
+    @post_panel.size = new_size.x, @post_panel.size.y
+    @confirm_panel.size = new_size.x, @confirm_panel.size.y
+    #@world.flag_rerender
   end
 
 end
@@ -395,14 +407,12 @@ class TweetsPanel < Thing
 
     @prev_top = -1
     @next_top = 0
-    @prev_selected = 0
+    @prev_selected_vl = nil
     @selected = 0
     @prev_visible_tweets = []
     @prev_last_visible_y = -1
 
     @time = 0
-
-    new_pad(size.x, size.y)
   end
 
   def selected_tweet
@@ -446,8 +456,8 @@ class TweetsPanel < Thing
 
   def tick(time)
     # Set selected tweetlines
-    if @prev_selected != @selected
-      @tweetview[@prev_selected].select(false) if @tweetview[@prev_selected]
+    if @prev_selected_vl != selected_tweet
+      @prev_selected_vl.select(false) if @prev_selected_vl
       selected_tweet.select
     end
 
@@ -477,13 +487,14 @@ class TweetsPanel < Thing
     # Tick and position the tweetlines that are visible
     visible_tweets.each.with_index do |tl, i|
       tl.pos.y = i
+      tl.size = size.x-3, tl.size.y
       tl.tick_to(@time, time)
     end
 
     flag_redraw if @prev_top != @next_top
 
     @prev_top = @next_top
-    @prev_selected = @selected
+    @prev_selected_vl = selected_tweet
 
     @time += time
   end
@@ -538,6 +549,12 @@ class TweetsPanel < Thing
     pad.write(width-1, height-1, @header.ljust(1))
   end
 
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    new_pad(new_size)
+    flag_redraw
+  end
+
 end
 
 class TitlePanel < Thing
@@ -549,7 +566,6 @@ class TitlePanel < Thing
     super()
     self.size = screen_width, 4
     @clients = clients
-    new_pad(screen_width, 4)
   end
 
   def redraw
@@ -572,6 +588,12 @@ class TitlePanel < Thing
     rerender_pad
   end
 
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    new_pad(new_size)
+    flag_redraw
+  end
+
 end
 
 class DetailPanel < Thing
@@ -586,7 +608,6 @@ class DetailPanel < Thing
     super()
     self.size = screen_width, 9
     @config = config
-    new_pad(screen_width+1, 10)
     watch_store(tweetstore)
   end
 
@@ -679,6 +700,8 @@ class DetailPanel < Thing
   end
 
   def on_resize(old_size, new_size)
+    return if old_size.x == new_size.x
+    new_pad(new_size.x+1, 10)
     flag_redraw
   end
 
@@ -694,7 +717,6 @@ class PostPanel < Thing
     self.size = screen_width, 6
     self.visible = false
     @time = 0
-    new_pad(screen_width, 6)
   end
 
   def set_target(post, reply_to)
@@ -752,6 +774,12 @@ class PostPanel < Thing
     end
   end
 
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    new_pad(new_size)
+    flag_redraw
+  end
+
 end
 
 class ConfirmPanel < Thing
@@ -764,7 +792,6 @@ class ConfirmPanel < Thing
     self.size = screen_width, 4
     self.visible = false
     @time = 0
-    new_pad(screen_width, 4)
   end
 
   def set_action(action_type, action_text)
@@ -802,6 +829,12 @@ class ConfirmPanel < Thing
 
   def rerender
     rerender_pad
+  end
+
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    new_pad(new_size)
+    flag_redraw
   end
 
 end

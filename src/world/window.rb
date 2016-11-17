@@ -125,8 +125,19 @@ module HasPad
     @pad_height
   end
 
-  def new_pad(width, height)
-    @curses_window = Ncurses.newpad(height, width)
+  def new_pad(*args)
+    if args.length == 1
+      width = args[0].x
+      height = args[0].y
+    elsif args.length == 2
+      width = args[0]
+      height = args[1]
+    end
+
+    pad = Ncurses.newpad(height, width)
+    raise "Failed to create a pad! width=#{width} height=#{height}" if pad == nil
+
+    @curses_window = pad
     @pad_width = width
     @pad_height = height
   end

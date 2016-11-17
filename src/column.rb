@@ -8,25 +8,6 @@ require_relative 'tweetstore'
 require_relative 'world/thing'
 require_relative 'world/window'
 
-module ColumnDefinitions
-
-  COLUMNS = {
-      SelectionColumn: 0,
-      FlagsColumn: 4,
-      UsernameColumn: 7,
-      RelationsColumn: 24,
-      TweetColumn: 26,
-      EntitiesColumn: -9,
-      TimeColumn: -4,
-  }
-  COLUMNS_BY_X = COLUMNS.to_a.sort do |lhs, rhs|
-    lhs = lhs.last
-    rhs = rhs.last
-    (lhs<0) != (rhs<0) ? rhs <=> lhs : lhs <=> rhs
-  end
-
-end
-
 class Column < Thing
 
   include HasPad
@@ -106,8 +87,8 @@ class FlagsColumn < Column
       flag_redraw
     end
 
-    if @tweetline.tweet.favorite_count != @favorite_count
-      @favorite_count = @tweetline.tweet.favorite_count
+    if @tweetline.favorites != @favorite_count
+      @favorite_count = @tweetline.favorites
       flag_redraw
     end
     if @tweetline.tweet.retweet_count != @retweet_count
@@ -121,23 +102,23 @@ class FlagsColumn < Column
     @f1 = false
     @f2 = false
     if @tweetline.own_tweet?
-      if @tweetline.tweet.favorite_count > 0
-        count = @tweetline.tweet.favorite_count
+      if @favorite_count > 0
+        count = @favorite_count
         @f1 = true
         pad.color(5,0,0)
         pad.write(0, 0, (count >= 10 ? '+' : count.to_s))
-      elsif @tweetline.tweet.retweet_count > 0
-        count = @tweetline.tweet.retweet_count
+      elsif @retweet_count > 0
+        count = @retweet_count
         @f2 = true
         pad.color(0,5,0)
         pad.write(1, 0, (count >= 10 ? '+' : count.to_s))
       end
     else
-      if @tweetline.favorited?
+      if @favorited
         @f1 = true
         pad.color(5,0,0)
         pad.write(0, 0, 'L')
-      elsif @tweetline.tweet.retweeted?
+      elsif @retweeted
         @f2 = true
         pad.color(0,5,0)
         pad.write(1, 0, 'R')

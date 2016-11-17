@@ -1,9 +1,58 @@
 #!/usr/bin/env ruby
 
+module ColumnDefinitions
+
+  COLUMNS = {
+      SelectionColumn: 0,
+      FlagsColumn: 4,
+      UsernameColumn: 7,
+      RelationsColumn: 24,
+      TweetColumn: 26,
+      EntitiesColumn: -9,
+      TimeColumn: -4,
+  }
+  COLUMNS_BY_X = COLUMNS.to_a.sort do |lhs, rhs|
+    lhs = lhs.last
+    rhs = rhs.last
+    (lhs<0) != (rhs<0) ? rhs <=> lhs : lhs <=> rhs
+  end
+
+end
+
 class Config
 
   def initialize
     @config = {
+      keybinds: {
+          'zt' => :scroll_cursor_to_top,
+          'zz' => :scroll_cursor_to_middle,
+          'zb' => :scroll_cursor_to_bottom,
+
+          'k' => :select_cursor_up,
+          :up_arrow => :select_cursor_up,
+          'j' => :select_cursor_down,
+          :down_arrow => :select_cursor_down,
+          'H' => :select_top_line,
+          'M' => :select_middle_line,
+          'L' => :select_bottom_line,
+          'g' => :select_first_line,
+          'G' => :select_last_line,
+          'h' => :select_previous_related_line,
+          :left_arrow => :select_previous_related_line,
+          'l' => :select_next_related_line,
+          :right_arrow => :select_next_related_line,
+
+          'f' => :favorite,
+          'F' => :unfavorite,
+          't' => :compose_tweet,
+          'r' => :compose_reply,
+          'R' => :compose_reply_to_all,
+          'e' => :retweet,
+          'd' => :delete,
+
+          'Q' => :quit,
+      },
+
       tweet_colors_default: {
         hashtag:          [3,3,5],
         link_domain:      [1,1,1,0],

@@ -79,7 +79,9 @@ class ViewLine < Thing
   end
 
   def on_resize(old_size, new_size)
+    return if new_size == old_size
     resize_columns
+    flag_rerender
   end
 
   private
@@ -126,6 +128,7 @@ class TweetLine < ViewLine
 
   attr_reader :relations
   attr_writer :favorited
+  attr_accessor :favorites
 
   attr_reader :replies_to_this
 
@@ -140,6 +143,7 @@ class TweetLine < ViewLine
 
     @relations = :none
     @favorited = @tweet.favorited?
+    @favorites = @tweet.favorite_count
 
     build_tweet_pieces
     create_columns
@@ -163,6 +167,10 @@ class TweetLine < ViewLine
     end
   end
 
+  def is_tweet?
+    true
+  end
+
   def tweet=(value)
     @tweet = value
     # TODO: Probably want to do all the other stuff like building reply tree or something
@@ -171,10 +179,6 @@ class TweetLine < ViewLine
 
   def favorited?
     @favorited
-  end
-
-  def is_tweet?
-    true
   end
 
   def mention?
