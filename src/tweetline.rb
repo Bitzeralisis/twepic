@@ -177,16 +177,46 @@ class TweetLine < ViewLine
     flag_redraw
   end
 
+  def extended_text
+    retweet? ? "RT @#{@tweet.retweeted_tweet.user.screen_name}: #{root_extended_text}" : root_extended_text
+  end
+
   def favorited?
     @favorited
   end
 
+  def has_wide_characters?
+    @text_width != @text_length
+  end
+
   def mention?
-    @_isMention ||= tweet.full_text.downcase.include?("@#{@store.clients.user.screen_name.downcase}")
+    @_isMention ||= extended_text.downcase.include?("@#{@store.clients.user.screen_name.downcase}")
   end
 
   def own_tweet?
     @_isOwnTweet ||= tweet.user.id == @store.clients.user.id
+  end
+
+  def root_extended_entities
+    h = root_tweet.to_h
+
+    original_entities = h[:entities]
+    h[:entities] = h[:extended_tweet][:entities] if h[:extended_tweet]
+    entities = root_tweet.user_mentions + root_tweet.urls + root_tweet.media + root_tweet.hashtags
+    h[:entities] = original_entities
+
+    entities
+  end
+
+  def root_extended_text
+    h = root_tweet.to_h
+    retval ||= h[:full_text] # Long tweets from REST with `tweet_mode: extended`
+    retval ||= h[:extended_tweet][:full_text] if h[:extended_tweet] # Long tweets from streaming
+    retval ||  h[:text] # Classic tweets from REST without special options
+  end
+
+  def root_tweet
+    retweet? ? tweet.retweeted_tweet : tweet
   end
 
   def retweet?
@@ -203,14 +233,21 @@ class TweetLine < ViewLine
   end
 
   def redraw
+    pad.erase
+
     # Clear/draw selection dots
-    # TODO: Fix bug where dots fuck up the text appearing like the streamer would
     if @selected
-      pad.color(0,0,0,1, :dim)
-      pad.write(0, 0, ''.ljust(size.x, '·'))
-    else
-      pad.color(0)
-      pad.write(0, 0, ''.ljust(size.x))
+      if has_wide_characters?
+        # Avoid rendering dots where the tweet would appear to prevent it from fucking up
+        left = @columns[:TweetColumn].pos.x
+        right = left + @text_width
+        pad.color(0,0,0,1, :dim)
+        pad.write(0, 0, ''.ljust(left, '·'))
+        pad.write(right, 0, ''.ljust(size.x-right, '·'))
+      else
+        pad.color(0,0,0,1, :dim)
+        pad.write(0, 0, ''.ljust(size.x, '·'))
+      end
     end
 
     if false
@@ -224,13 +261,20 @@ class TweetLine < ViewLine
     rerender_pad
   end
 
+  def on_resize(old_size, new_size)
+    super
+    return if new_size == old_size
+    new_pad(new_size)
+    flag_redraw
+  end
+
   private
 
   def build_tweet_pieces
     # Transform entities. We do this by making a sorted list of entities we care about, splitting
     # the tweet based on their indices, transforming the pieces that correspond to entities, and
     # rejoining all the pieces
-    full_text = @tweet.full_text
+    full_text = root_extended_text
     text_type =
       if retweet?
         :text_retweet
@@ -242,16 +286,10 @@ class TweetLine < ViewLine
         :text_normal
       end
 
-    entities = @tweet.user_mentions + @tweet.urls + @tweet.media + @tweet.hashtags
+    entities = root_extended_entities
     entities.sort! { |lhs, rhs| lhs.indices.first <=> rhs.indices.first }
     entities.uniq! { |e| e.indices.first }
     entities = [ FakeEntity.new([0]) ] + entities + [ FakeEntity.new([full_text.length]) ]
-    if retweet?
-      # Where [] denotes an entity, the tweet starts like '[]RT [@username]: text...'
-      # Put in the new FakeEntity {} to get rid of the colon '[]RT [@username]{:} text...'
-      colon_index = full_text.index(':')
-      entities.insert(2, FakeEntity.new([colon_index, colon_index+1]))
-    end
 
     tweet_pieces = []
     entities.each_cons(2) do |entity, next_entity|
@@ -273,16 +311,16 @@ class TweetLine < ViewLine
       end
       tweet_pieces << TweetPiece.new(nil, text_type, full_text[entity.indices.last...next_entity.indices.first])
     end
+
     if retweet?
-      # See above; piece 0 is 'RT', piece 1 is "@#{username}", 2 is '', 3 is the text
-      tweet_pieces[0].type = :retweet_marker
-      tweet_pieces[1].type = :retweet_username
-      # These next two lines move the space between the rt'd user's username and the beginning of
-      # the text from being at the beginning of the text to after the username. This way, if :none
-      # is used to render the username, it will also get rid of the space after it
-      tweet_pieces[1].text << ' '
-      tweet_pieces[3].text[0] = ''
+      # Put `RT @retweeted_username ` in front of retweets
+      retweeted_user_entity = @tweet.user_mentions.first
+      tweet_pieces.unshift(
+          TweetPiece.new(nil, :retweet_marker, 'RT '),
+          TweetPiece.new(retweeted_user_entity, :retweet_username, "@#{retweeted_user_entity.screen_name} ")
+      )
     end
+
     tweet_pieces.each { |piece| piece.text = $htmlentities.decode(piece.text) }
     tweet_pieces = tweet_pieces.flat_map do |piece|
       # TODO: Combine consecutive newlines and tabs, filter out empty strings
@@ -299,6 +337,8 @@ class TweetLine < ViewLine
     end
 
     @tweet_pieces = tweet_pieces
+    @text_width = @tweet_pieces.map { |piece| piece.text_width }.reduce(0, :+)
+    @text_length = @tweet_pieces.map { |piece| piece.text.length }.reduce(0, :+)
   end
 
 end
@@ -323,10 +363,18 @@ class StreamLine < ViewLine
   end
 
   def redraw
+    pad.erase
   end
 
   def rerender
     rerender_pad
+  end
+
+  def on_resize(old_size, new_size)
+    super
+    return if new_size == old_size
+    new_pad(new_size)
+    flag_redraw
   end
 
 end

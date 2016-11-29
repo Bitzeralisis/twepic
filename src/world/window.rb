@@ -15,7 +15,31 @@ module HasWindow
   end
 
   def getch
-    @curses_window.getch
+    # This gets a UTF-8 character from a stream of bytes
+    first = @curses_window.getch
+    return first if first == -1 or first == Ncurses::KEY_MOUSE
+    if (first & 0b11111100) == 0b11111100
+      count = 6
+    elsif (first & 0b11111000) == 0b11111000
+      count = 5
+    elsif (first & 0b11110000) == 0b11110000
+      count = 4
+    elsif (first & 0b11100000) == 0b11100000
+      count = 3
+    elsif (first & 0b11000000) == 0b11000000
+      count = 2
+    elsif (first & 0b10000000) == 0b10000000
+      return first
+    else
+      count = 1
+    end
+    bytes = [ first ]
+    (count-1).times { bytes << @curses_window.getch }
+    $logger.debug(bytes.to_s)
+    return first if bytes.any? { |b| b == -1 }
+    out = bytes.pack('C*').force_encoding('UTF-8').ord
+    $logger.debug(out)
+    out
   end
 
   # Sets curses's attributes for writing

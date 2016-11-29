@@ -107,7 +107,8 @@ class FlagsColumn < Column
         @f1 = true
         pad.color(5,0,0)
         pad.write(0, 0, (count >= 10 ? '+' : count.to_s))
-      elsif @retweet_count > 0
+      end
+      if @retweet_count > 0
         count = @retweet_count
         @f2 = true
         pad.color(0,5,0)
@@ -118,7 +119,8 @@ class FlagsColumn < Column
         @f1 = true
         pad.color(5,0,0)
         pad.write(0, 0, 'L')
-      elsif @retweeted
+      end
+      if @retweeted
         @f2 = true
         pad.color(0,5,0)
         pad.write(1, 0, 'R')
@@ -189,6 +191,12 @@ class RelationsColumn < Column
   def redraw
     pad.erase
     case @relation
+      when :retweet_of_tweet
+        pad.color(0,3,0)
+        pad.write(0, 0, '>')
+      when :original_of_retweet
+        pad.color(0,5,0, :bold)
+        pad.write(0, 0, '>')
       when :same_user
         pad.color(4,4,1, :bold)
         pad.write(0, 0, '>')

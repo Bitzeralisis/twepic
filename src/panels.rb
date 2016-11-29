@@ -7,6 +7,8 @@ require_relative 'tweetline'
 require_relative 'tweetstore'
 require_relative 'world/world'
 
+require_relative 'panel_set_consume_input'
+
 class PanelSet < ThingContainer
 
   include HasWindow
@@ -29,7 +31,7 @@ class PanelSet < ThingContainer
     @tweetstore.check_profile_image(@clients.user)
 
     @statusline = ''
-    @header = ''
+    @header = nil
 
     @post = ''
     @reply_to = nil
@@ -44,14 +46,18 @@ class PanelSet < ThingContainer
     @title_panel = TitlePanel.new(@clients)
     @tweets_panel = TweetsPanel.new(@tweetstore)
     @detail_panel = DetailPanel.new(@config, @tweetstore)
+    @notice_panel = NoticePanel.new(@detail_panel)
     @post_panel = PostPanel.new
     @confirm_panel = ConfirmPanel.new
+    @events_panel = EventsPanel.new(@clients, @config)
 
     self << @title_panel
     self << @tweets_panel
     self << @detail_panel
+    self << @notice_panel
     self << @post_panel
     self << @confirm_panel
+    self << @events_panel
   end
 
   def selected_tweet
@@ -80,12 +86,13 @@ class PanelSet < ThingContainer
     # Consume events from streaming
     until @clients.stream_queue.empty?
       event = @clients.stream_queue.pop
+      @events_panel.add_incoming_event(event)
       case event
         when Twitter::Tweet
           # TODO: Deal with duplicates
           # TODO: When it's a retweet of your own tweet, carry over fav and rt count from orig tweet
-          # TODO: When it's a retweet of your own tweet, increment your tweet's rt count
-          #       and the rt count of every rt of that tweet.
+          # TODO: When it's a retweet of your own tweet, increment your tweet's rt count and the rt count of every rt of that tweet.
+          # TODO: Link all RTs of a tweet together somehow?
           # If we can scroll down one tweet without the selection arrow
           # disappearing, then do so, but only if the view is full
           scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y - 1 == @tweetstore.size
@@ -154,184 +161,6 @@ class PanelSet < ThingContainer
     super
   end
 
-  def timeline_consume_input(input)
-    if @header == 'z'
-      case input
-        when 't'.ord
-          scroll_top(selected_index)
-        when 'z'.ord
-          scroll_top(selected_index-(@tweets_panel.size.y-1)/2)
-        when 'b'.ord
-          scroll_top(selected_index-@tweets_panel.size.y+1)
-      end
-      @header = ''
-    else
-      case input
-        # Mouse control
-
-        when Ncurses::KEY_MOUSE
-          mouse_event = Ncurses::MEVENT.new
-          Ncurses::getmouse(mouse_event)
-          if mouse_event.bstate & Ncurses::BUTTON1_PRESSED != 0
-            select_tweet(top + mouse_event.y-@tweets_panel.pos.y) if mouse_event.y >= @tweets_panel.pos.y && mouse_event.y < @tweets_panel.size.y+@tweets_panel.pos.y
-          elsif mouse_event.bstate & Ncurses::BUTTON4_PRESSED != 0
-            scroll_top(top-3)
-          elsif mouse_event.bstate & Ncurses::BUTTON2_PRESSED != 0 # or mouse_event.bstate & Ncurses::REPORT_MOUSE_POSITION != 0
-            scroll_top(top+3)
-          end
-
-        # Keyboard control
-
-        # Movement commands
-        when 'k'.ord, 259 # up arrow
-          select_tweet(selected_index-1)
-        when 'j'.ord, 258 # down arrow
-          select_tweet(selected_index+1)
-
-        when 'H'.ord
-          select_tweet(top)
-        when 'M'.ord
-          select_tweet(top+(visible_tweets.size-1)/2)
-        when 'L'.ord
-          select_tweet(top+visible_tweets.size-1)
-        when 'g'.ord
-          select_tweet(0)
-        when 'G'.ord
-          select_tweet(tweetview.size-1)
-
-        # TODO: Traverse all relations with this, not just the reply tree
-        when 'h'.ord, 'l'.ord, 260, 261 # left arrow, right arrow
-          if @tweetstore.reply_tree.size > 1 and selected_tweet.is_tweet?
-            rt_index = @tweetstore.reply_tree.find_index { |tl| tl.tweet.id >= selected_tweet.tweet.id }
-            rt_index = [ 0, rt_index-1 ].max if [ 'h'.ord, 260  ].include?(input)
-            rt_index = [ rt_index+1, @tweetstore.reply_tree.size-1 ].min if [ 'l'.ord, 261 ].include?(input)
-            ts_index = @tweetstore.find_index { |tl| tl.tweet.id == @tweetstore.reply_tree[rt_index].tweet.id }
-            select_tweet(ts_index, false) if ts_index
-          end
-
-        # Scrolling commands
-        when 'z'.ord
-          @header = 'z'
-
-        # No confirmation commands
-        when 'f'.ord
-          # TODO: Favorite retweets correctly
-          return unless selected_tweet.is_tweet?
-          @clients.rest_api.favorite(selected_tweet.tweet.id)
-        when 'F'.ord
-          # TODO: Don't crash when the tweet is un-unfavoritable
-          return unless selected_tweet.is_tweet?
-          @clients.rest_api.unfavorite(selected_tweet.tweet.id)
-
-        # Switch to post-mode commands
-        when 't'.ord
-          switch_mode(:post)
-          @reply_to = nil
-
-        when 'r'.ord, 'R'.ord
-          return unless selected_tweet.is_tweet? # Do nothing when following stream
-          switch_mode(:post)
-
-          # When replying to a retweet, we reply to the retweeted status, not the status that is a retweet
-          reply_tweetline = selected_tweet
-          @reply_to =
-              if reply_tweetline.retweet?
-                reply_tweetline.tweet.retweeted_status
-              else
-                reply_tweetline.tweet
-              end
-
-          # Populate the tweet with the @names of people being replied to
-          if input == 'R'.ord # Also include @names of every person mentioned in the tweet
-            mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(@reply_to.text)
-            mentioned_users = mentioned_users.uniq
-            mentioned_users.delete(@reply_to.user.screen_name)
-            mentioned_users.unshift(@reply_to.user.screen_name)
-            mentioned_users.delete(@clients.user.screen_name)
-            mentioned_users << reply_tweetline.tweet.user.screen_name if reply_tweetline.retweet?
-            mentioned_users.map! { |u| "@#{u}" }
-            @post = "#{mentioned_users.join(' ')} "
-          elsif input == 'r'.ord # Only have @name of the user of the tweet
-            @post = "@#{@reply_to.user.screen_name} "
-          end
-
-        # Switch to confirm-mode commands
-        when 'e'.ord
-          return unless selected_tweet.is_tweet? # Do nothing when following stream
-          switch_mode(:confirm)
-          @confirm_action = :retweet
-          @confirm_keys = [ 'y'.ord, 'Y'.ord, 'e'.ord, '\r'.ord ]
-          @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
-          @confirm_text = 'Really retweet this tweet? eyY/nN'
-
-        when 'd'.ord
-          return unless selected_tweet.is_tweet? # Do nothing when following stream
-          return unless selected_tweet.tweet.user.id == @clients.user.id # Must be own tweet
-          switch_mode(:confirm)
-          @confirm_action = :delete
-          @confirm_keys = [ 'y'.ord, 'Y'.ord, 'd'.ord, '\r'.ord ]
-          @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
-          @confirm_text = 'Really delete this tweet? dyY/nN'
-
-        # Other commands
-        when 'Q'.ord
-          world.quit
-
-      end
-    end
-  end
-
-  def post_consume_input(input)
-    case input
-
-      when Ncurses::KEY_MOUSE
-        nil
-
-      # Esc
-      when 27
-        # Exit post mode
-        @post = ''
-        switch_mode(:timeline)
-
-      # Backspace
-      when 127
-        # Delete a character
-        @post = @post[0..-2]
-
-      # Return
-      when "\r".ord
-        # Post the tweet
-        post_tweet
-        @post = ''
-        switch_mode(:timeline)
-
-      when Ncurses::KEY_MOUSE
-        mouse_event = Ncurses::MEVENT.new
-        Ncurses::getmouse(mouse_event)
-        @post += mouse_event.bstate.to_s + ' '
-
-      else
-        # Every other input is just a character in the post
-        @post += input.chr(Encoding::UTF_8)
-      #@post += input.to_s
-    end
-  end
-
-  def confirm_consume_input(input)
-    if @confirm_keys.include?(input)
-      case @confirm_action
-        when :retweet
-          @clients.rest_api.retweet(selected_tweet.tweet.id)
-          switch_mode(:timeline)
-        when :delete
-          @clients.rest_api.destroy_status(selected_tweet.tweet.id)
-          switch_mode(:timeline)
-      end
-    elsif @deny_keys.include?(input)
-      switch_mode(:timeline)
-    end
-  end
-
   def render
     super
     world.rerender
@@ -370,9 +199,11 @@ class PanelSet < ThingContainer
     end
 
     if @reply_to
-      @clients.rest_api.update(@post, in_reply_to_status: @reply_to)
+      @clients.rest_concurrently(:reply, @post, @reply_to) do |rest, post, reply_to|
+        rest.update(post, in_reply_to_status: reply_to)
+      end
     else
-      @clients.rest_api.update(@post)
+      @clients.rest_concurrently(:tweet, @post) { |rest, post| rest.update(post) }
     end
   end
 
@@ -380,15 +211,18 @@ class PanelSet < ThingContainer
     return if old_size == new_size
     @title_panel.pos = 0,0
     @tweets_panel.pos = 0,4
-    @detail_panel.pos = 0, new_size.y-10
-    @post_panel.pos = 0, new_size.y-7
-    @confirm_panel.pos = 0, new_size.y-5
+    @detail_panel.pos = 0, new_size.y-12
+    @notice_panel.pos = 0, new_size.y-4
+    @post_panel.pos = 0, new_size.y-9
+    @confirm_panel.pos = 0, new_size.y-7
+    @events_panel.pos = 0, new_size.y-2
     @title_panel.size = new_size.x, @title_panel.size.y
-    @tweets_panel.size = new_size.x, new_size.y-15
+    @tweets_panel.size = new_size.x, new_size.y-17
     @detail_panel.size = new_size.x, @detail_panel.size.y
+    @notice_panel.size = new_size.x, @notice_panel.size.y
     @post_panel.size = new_size.x, @post_panel.size.y
     @confirm_panel.size = new_size.x, @confirm_panel.size.y
-    #@world.flag_rerender
+    @events_panel.size = new_size.x, @events_panel.size.y
   end
 
 end
@@ -435,44 +269,53 @@ class TweetsPanel < Thing
     @tweetview
   end
 
-  def select_tweet(index, rebuild = true)
+  def select_tweet(index, rebuild = true, force_scroll = true)
     @selected = [ 0, [ index, @tweetview.size-1 ].min ].max
-    if @selected < @next_top
-      scroll_top(@selected)
-    elsif @selected >= @next_top + size.y
-      scroll_top(@selected - size.y + 1)
+    if force_scroll
+      if @selected < @next_top
+        scroll_top(@selected)
+      elsif @selected >= @next_top + size.y
+        scroll_top(@selected - size.y + 1)
+      end
     end
     @tweetstore.rebuild_reply_tree(selected_tweet) if selected_tweet.is_tweet? and rebuild
   end
 
-  def scroll_top(index)
+  def scroll_top(index, force_select_in_visible = false)
     @next_top = [ 0, [ index, @tweetview.size-1 ].min ].max
-    if @selected >= @next_top + size.y
-      select_tweet(@next_top + size.y - 1)
-    elsif @selected < @next_top
-      select_tweet(@next_top)
+    if force_select_in_visible
+      if @selected >= @next_top + size.y
+        select_tweet(@next_top + size.y - 1)
+      elsif @selected < @next_top
+        select_tweet(@next_top)
+      end
     end
   end
 
-  def tick(time)
-    # Set selected tweetlines
-    if @prev_selected_vl != selected_tweet
-      @prev_selected_vl.select(false) if @prev_selected_vl
-      selected_tweet.select
-    end
-
-    # Set relations on tweetlines
+  def update_relations
     visible_tweets.each do |tl|
       if tl.is_tweet?
         tl.set_relations
 
         if selected_tweet.is_tweet?
+          # Retweet of tweet
+          if tl.retweet? and
+              (tl.tweet.retweeted_tweet.id == selected_tweet.tweet.retweeted_tweet.id or
+                  tl.tweet.retweeted_tweet.id == selected_tweet.tweet.id)
+            tl.set_relations(:retweet_of_tweet)
+          end
+
+          # Original of retweet
+          if selected_tweet.retweet? and selected_tweet.tweet.retweeted_tweet.id == tl.tweet.id
+            tl.set_relations(:original_of_retweet)
+          end
+
           # Tweet by same user
           if tl.tweet.user.id == selected_tweet.tweet.user.id
             tl.set_relations(:same_user)
           end
 
-          # Tweet in replied-to chain (highlight the most immediate replied-to)
+          # Tweet in replied-to chain
           if @tweetstore.reply_tree.size > 1 and @tweetstore.reply_tree.include?(tl)
             if tl.tweet.user.id == selected_tweet.tweet.user.id
               tl.set_relations(:reply_tree_same_user)
@@ -483,6 +326,14 @@ class TweetsPanel < Thing
         end
       end
     end
+  end
+
+  def tick(time)
+    # Set selected tweetlines
+    if @prev_selected_vl != selected_tweet
+      @prev_selected_vl.select(false) if @prev_selected_vl
+      selected_tweet.select
+    end
 
     # Tick and position the tweetlines that are visible
     visible_tweets.each.with_index do |tl, i|
@@ -492,6 +343,7 @@ class TweetsPanel < Thing
     end
 
     flag_redraw if @prev_top != @next_top
+    update_relations if @prev_top != @next_top or @prev_selected_vl != selected_tweet
 
     @prev_top = @next_top
     @prev_selected_vl = selected_tweet
@@ -660,9 +512,20 @@ class DetailPanel < Thing
       UsernameColumn.draw_username(pad, ColumnDefinitions::COLUMNS[:UsernameColumn], 0, name, profile_image, :bold)
     end
 
-    time = @tweetline.tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
-    pad.color(1,1,1,1)
-    pad.write(size.x-time.length-1, 0, time)
+    favs = 5,0,0, @tweetline.root_tweet.favorite_count == 0 ? '' : " ♥ #{@tweetline.root_tweet.favorite_count} "
+    rts = 0,5,0, @tweetline.root_tweet.retweet_count == 0 ? '' : " ⟳ #{@tweetline.root_tweet.retweet_count} "
+    time = 1,1,1,1, @tweetline.root_tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
+    source = 1,1,1,1, " #{@tweetline.root_tweet.source.gsub(/<.*?>/, '')} "
+    place = 1,1,1,0, @tweetline.root_tweet.place.nil? ? '' : " ⌖ #{@tweetline.tweet.place.name} "
+    xPos = size.x
+    [ favs, rts, time, source, place ].reverse_each do |text|
+      string = text.last
+      color = text[0..-2]
+      next if string.empty?
+      xPos -= UnicodeUtils.display_width(string)+1
+      pad.color(*color)
+      pad.write(xPos, 0, string)
+    end
 
     xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
     yPos = 2
@@ -782,6 +645,66 @@ class PostPanel < Thing
 
 end
 
+class NoticePanel < Thing
+
+  include HasPad
+  include PadHelpers
+
+  FADE_TIME = 60
+
+  def initialize(detail_panel)
+    super()
+    @detail_panel = detail_panel
+    self.size = screen_width, 1
+
+    @text = ''
+    @color = [0]
+    @start_time = -2*FADE_TIME
+    @time = 0
+  end
+
+  def set_notice(text, *color)
+    @text = text
+    @color = color
+    @start_time = @time
+  end
+
+  def tick(time)
+    flag_redraw if @time <= @start_time+FADE_TIME
+    @time += time
+  end
+
+  def redraw
+    pad.erase
+
+    t = (@time - @start_time).to_f / FADE_TIME
+    col = @color.map { |c| ((1.0-t)*c).round }
+    pos = (size.x-@text.length)/2
+
+    pad.color(*col)
+    pad.write(pos-4, 0, "░▒▓ #{''.ljust(@text.length)} ▓▒░")
+
+    pad.color(*col, :bold, :reverse)
+    pad.write(pos-1, 0, " #{@text} ")
+  end
+
+  def rerender
+    return if @time >= @start_time+FADE_TIME
+    rerender_pad
+  end
+
+  def flag_rerender(rerender = true)
+    super
+    @detail_panel.flag_rerender(rerender)
+  end
+
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    new_pad(new_size)
+  end
+
+end
+
 class ConfirmPanel < Thing
 
   include HasPad
@@ -833,6 +756,182 @@ class ConfirmPanel < Thing
 
   def on_resize(old_size, new_size)
     return if old_size == new_size
+    new_pad(new_size)
+    flag_redraw
+  end
+
+end
+
+class EventsPanel < Thing
+
+  module Event
+    attr_accessor :event, :display, :size, :x, :stopped, :decay
+  end
+
+  class OutEvent
+    include Event
+    def initialize(rest, display)
+      @event = rest
+      @display = display
+      @size = @display[0].length + PADDING
+      @x = 0
+      @stopped = false
+      @decay = 0
+    end
+  end
+
+  class InEvent
+    include Event
+    def initialize(event_type, display, right)
+      @event = event_type
+      @display = display
+      @size = @display[0].length + PADDING
+      @x = right
+      @stopped = false
+      @decay = 0
+    end
+  end
+
+  class FakeEvent
+    include Event
+    def initialize(x = 0)
+      @event = nil
+      @display = ['', 0]
+      @size = 0
+      @x = x
+      @stopped = true
+      @decay = 0
+    end
+    def decay=
+    end
+  end
+
+  include HasPad
+  include PadHelpers
+
+  PADDING = 1
+  SPEED_FACTOR = 0.1
+  SPEED = 1
+
+  def initialize(clients, config)
+    super()
+    @clients = clients
+    @config = config
+    @events_out = { rhs: FakeEvent.new }
+    @events_in = [ FakeEvent.new(-10) ]
+    self.size = screen_width, 2
+  end
+
+  def add_incoming_event(streaming_event)
+    type =
+        case streaming_event
+          when Twitter::Tweet
+            # TODO: Detect reply
+            :tweet
+          when Twitter::Streaming::DeletedTweet
+            :delete
+          when Twitter::Streaming::Event
+            streaming_event.name
+          else
+            :nil
+        end
+    display = @config.event_in_display(type)
+    if display
+      @events_in << InEvent.new(type, display, size.x)
+      flag_redraw
+    end
+  end
+
+  def tick(time)
+    # Add new outgoing events
+    old_size = @events_out.size
+    @clients.outgoing_requests.each do |r|
+      @events_out[r] = OutEvent.new(r, @config.event_out_display(r.name)) unless @events_out[r]
+    end
+    flag_redraw if old_size != @events_out.size
+
+    # Move events
+    ([:rhs] + @clients.outgoing_requests).each_cons(2) do |rhs, lhs|
+      left = @events_out[lhs]
+      right = @events_out[rhs]
+      if !left.stopped
+        x_old = left.x
+        # Move the left event right by SPEED_FACTOR of the distance to the right event
+        left.x += (SPEED_FACTOR*(right.x-left.size-left.x)).ceil
+        # Make sure events don't overlap
+        left.x = [ left.x, right.x-left.size ].min
+        left.stopped = true if left.x == x_old
+      elsif [ :success, :failure ].include?(left.event.status)
+        left.decay += 1
+      end
+    end
+
+    @events_in.each_cons(2) do |left, right|
+      # Move right event left by SPEED
+      right.x -= SPEED
+      # Make sure events don't overlap
+      right.x = [ left.x+left.size, right.x ].max
+    end
+
+    flag_redraw if @events_out.size > 1 or @events_in.size > 1
+
+    # Delete decayed events
+    old_sizes = [ @events_out.size, @events_in.size ]
+    @clients.outgoing_requests.delete_if { |r| @events_out[r].decay >= 30 }
+    @events_out.delete_if { |_, e| e.decay >= 30 }
+    @events_in.delete_if.with_index { |e, i| i > 0 && e.x + e.size < 0 }
+    flag_redraw if old_sizes != [ @events_out.size, @events_in.size ]
+  end
+
+  def redraw
+    pad.erase
+
+    @events_out.each_value do |e|
+      if e.event and e.x >= 0
+        name = e.display[0]
+        color = e.display[1..-1]
+        if e.stopped
+          if e.event.status == :success and e.decay > 15
+            pad.color(0, (5.0*(30-e.decay)/15.0).round, 0)
+            gibberish = (1..name.length).map{ (33+rand(15)).chr }.join
+            pad.write(e.x, 0, gibberish)
+          elsif e.event.status == :failure
+            pad.color(4,0,0, :bold)
+            pad.write(e.x, 0, name)
+          else
+            pad.color(*color)
+            pad.write(e.x, 0, name)
+          end
+        else
+          pad.color(*color)
+          pad.write(e.x, 0, name)
+        end
+      end
+    end
+
+    @events_in.each do |e|
+      if e.x >= 0
+        name = e.display[0]
+        color = e.display[1..-1]
+        pad.color(*color)
+        pad.write(e.x, 1, name)
+      end
+    end
+
+    pad.color(0,0,0,1)
+    pad.write(0, 0, 'OUT > ')
+    pad.write(0, 1, '<<<<< ')
+    pad.write(size.x-6, 0, ' >>>>>')
+    pad.write(size.x-6, 1, ' < IN ')
+  end
+
+  def rerender
+    rerender_pad
+  end
+
+  def on_resize(old_size, new_size)
+    return if old_size == new_size
+    @events_out[:rhs].x = new_size.x-5
     new_pad(new_size)
     flag_redraw
   end
