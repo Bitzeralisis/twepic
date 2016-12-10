@@ -109,6 +109,8 @@ class ViewLine < Thing
 
 end
 
+# TODO: At some point, we will have to break apart TweetLine as a wrapper to a Tweet, and TweetLine
+#       as a Thing that is displayed in the World
 class TweetLine < ViewLine
 
   def column_mappings
@@ -173,6 +175,8 @@ class TweetLine < ViewLine
 
   def tweet=(value)
     @tweet = value
+    @favorited = @tweet.favorited?
+    @favorites = @tweet.favorite_count
     # TODO: Probably want to do all the other stuff like building reply tree or something
     flag_redraw
   end
@@ -303,8 +307,12 @@ class TweetLine < ViewLine
           if slash_index.nil?
             tweet_pieces << TweetPiece.new(entity, :link_domain, entity.display_url)
           else
-            tweet_pieces << TweetPiece.new(entity, :link_domain, entity.display_url[0...slash_index])
-            tweet_pieces << TweetPiece.new(entity, :link_route, entity.display_url[slash_index..-1])
+            domain = TweetPiece.new(entity, :link_domain, entity.display_url[0...slash_index])
+            route  = TweetPiece.new(entity, :link_route, entity.display_url[slash_index..-1])
+            domain.grouped_with += [ route ]
+            route.grouped_with += [ domain ]
+            tweet_pieces << domain
+            tweet_pieces << route
           end
         else
           nil # Do nothing - the entity is discarded
@@ -323,15 +331,21 @@ class TweetLine < ViewLine
 
     tweet_pieces.each { |piece| piece.text = $htmlentities.decode(piece.text) }
     tweet_pieces = tweet_pieces.flat_map do |piece|
-      # TODO: Combine consecutive newlines and tabs, filter out empty strings
-      piece.text.split(/(\r\n|\r|\n|\t)/).map do |string|
-        case string
-          when "\r\n", "\r", "\n"
-            TweetPiece.new(FakeEntity.new(:newline), :whitespace, '↵ ')
-          when "\t"
-            TweetPiece.new(FakeEntity.new(:tab), :whitespace, '⇥ ')
-          else
-            TweetPiece.new(piece.entity, piece.type, string)
+      # TODO: Filter out empty strings
+      split = piece.text.split(/(\r\n|\r|\n|\t)/)
+      if split.size == 1
+        # Don't make new pieces for non-split pieces so groupings are preserved
+        piece
+      else
+        split.map do |string|
+          case string
+            when "\r\n", "\r", "\n"
+              TweetPiece.new(FakeEntity.new(:newline), :whitespace, '↵ ')
+            when "\t"
+              TweetPiece.new(FakeEntity.new(:tab), :whitespace, '⇥ ')
+            else
+              TweetPiece.new(piece.entity, piece.type, string)
+          end
         end
       end
     end
@@ -379,6 +393,49 @@ class StreamLine < ViewLine
 
 end
 
+class FoldLine < ViewLine
+
+  def initialize(parent)
+    super
+    @folded_lines = []
+    @size = Coord.new(parent.size.x-3, 1)
+    create_columns
+    new_pad(size.x, size.y)
+  end
+
+  def is_tweet?
+    false
+  end
+
+  def <<(rhs)
+    @folded_lines << rhs
+    flag_redraw
+  end
+
+  def redraw
+    pad.erase
+
+    num_rts = @folded_lines.size
+    num_rters = @folded_lines.uniq { |tl| tl.tweet.user.id }.size
+    num_rtds = @folded_lines.uniq { |tl| tl.tweet.retweeted_tweet.user.id }.size
+
+    pad.color(0,0,0,1)
+    pad.write(0, 0, " #{num_rts} FOLDED RETWEETS by #{num_rters} USER(S) of #{num_rtds} USER(S) ".center(size.x, '-'))
+  end
+
+  def rerender
+    rerender_pad
+  end
+
+  def on_resize(old_size, new_size)
+    super
+    return if new_size == old_size
+    new_pad(new_size)
+    flag_redraw
+  end
+
+end
+
 class FakeEntity
   attr_reader :data
   def initialize(data)
@@ -392,10 +449,12 @@ end
 class TweetPiece
   attr_accessor :entity, :type
   attr_reader :text
-  def initialize(entity, type, text)
+  attr_accessor :grouped_with
+  def initialize(entity, type, text, grouped_with: [])
     @entity = entity
     @type = type
     @text = text
+    @grouped_with = [ self ] + grouped_with
   end
   def text=(val)
     @text = val
@@ -405,4 +464,3 @@ class TweetPiece
     @_text_width ||= UnicodeUtils.display_width(@text)
   end
 end
-

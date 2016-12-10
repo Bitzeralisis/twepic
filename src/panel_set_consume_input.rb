@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'clipboard'
+require 'launchy'
 
 class PanelSet < ThingContainer
 
@@ -41,11 +42,17 @@ class PanelSet < ThingContainer
       when Ncurses::KEY_MOUSE
         nil
 
+      # Ctrl-w
+      when 23
+        # Delete a word
+        index = @post.rindex(/\b\w+/)
+        @post = @post[0...index] if index
+
       # Esc
       when 27
         # Exit post mode
         @post = ''
-        switch_mode(:timeline)
+        switch_mode(:previous_mode)
 
       # Backspace
       when 127
@@ -54,20 +61,24 @@ class PanelSet < ThingContainer
 
       # Return
       when "\r".ord
-        # Post the tweet
-        post_tweet
-        @post = ''
-        switch_mode(:timeline)
+        # If there's a backslash at the end, remove the backslash and insert a newline
+        if @post[-1] == "\\"
+          @post[-1] = "\n"
+        else
+          # Else post the tweet
+          post_tweet
+          @post = ''
+          switch_mode(:previous_mode)
+        end
 
       when Ncurses::KEY_MOUSE
         mouse_event = Ncurses::MEVENT.new
         Ncurses::getmouse(mouse_event)
-        @post += mouse_event.bstate.to_s + ' '
+        # @post += mouse_event.bstate.to_s + ' '
 
       else
         # Every other input is just a character in the post
         @post += input.chr(Encoding::UTF_8)
-      #@post += input.to_s
     end
   end
 
@@ -76,13 +87,13 @@ class PanelSet < ThingContainer
       case @confirm_action
         when :retweet
           @clients.rest_concurrently(:retweet, selected_tweet.tweet.id) { |rest, id| rest.retweet(id) }
-          switch_mode(:timeline)
+          switch_mode(:previous_mode)
         when :delete
           @clients.rest_concurrently(:delete, selected_tweet.tweet.id) { |rest, id| rest.destroy_status(id) }
-          switch_mode(:timeline)
+          switch_mode(:previous_mode)
       end
     elsif @deny_keys.include?(input)
-      switch_mode(:timeline)
+      switch_mode(:previous_mode)
     end
   end
 
@@ -127,21 +138,21 @@ class PanelSet < ThingContainer
         # Reply tree traversal
         rt_index = @tweetstore.reply_tree.find_index { |tl| tl.tweet.id >= selected_tweet.tweet.id }
         rt_index = [ 0, [ rt_index+offset, @tweetstore.reply_tree.size-1 ].min ].max
-        ts_index = @tweetstore.find_index { |tl| tl.tweet.id == @tweetstore.reply_tree[rt_index].tweet.id }
-        select_tweet(ts_index, false) if ts_index
+        tv_index = tweetview.find_index { |tl| tl.is_tweet? and tl.tweet.id == @tweetstore.reply_tree[rt_index].tweet.id }
+        select_tweet(tv_index, false) if tv_index
       else
         # Same user traversal
-        ts_index = @tweetstore.find_index { |tl| tl.tweet.id == selected_tweet.tweet.id }
+        tv_index = tweetview.find_index { |tl| tl.is_tweet? and tl.tweet.id == selected_tweet.tweet.id }
         search_in =
             if offset < 0
-              @tweetstore[0...ts_index].reverse
+              tweetview[0...tv_index].reverse
             else
-              @tweetstore[ts_index+1..-1]
+              tweetview[tv_index+1..-1]
             end
-        si_index = search_in.find_index { |tl| tl.tweet.user.id == selected_tweet.tweet.user.id }
+        si_index = search_in.find_index { |tl| tl.is_tweet? and tl.tweet.user.id == selected_tweet.tweet.user.id }
         if si_index
-          ts_index = @tweetstore.find_index { |tl| tl.tweet.id == search_in[si_index].tweet.id }
-          select_tweet(ts_index, false)
+          tv_index = tweetview.find_index { |tl| tl.is_tweet? and tl.tweet.id == search_in[si_index].tweet.id }
+          select_tweet(tv_index, false)
         end
       end
     end
@@ -238,17 +249,23 @@ class PanelSet < ThingContainer
   def action_selection_copy_text
     return unless selected_tweet.is_tweet?
     Clipboard.copy(selected_tweet.extended_text)
-    @notice_panel.set_notice('COPIED', 5,5,5)
+    set_notice('COPIED TWEET', 5,5,5)
   end
 
   def action_selection_copy_link
     return unless selected_tweet.is_tweet?
-    if selected_tweet.retweet?
-      Clipboard.copy(selected_tweet.tweet.retweeted_tweet.url)
-    else
-      Clipboard.copy(selected_tweet.tweet.url)
-    end
-    @notice_panel.set_notice('COPIED LINK', 5,5,5)
+    Clipboard.copy(selected_tweet.root_tweet.url)
+    set_notice('COPIED TWEET LINK', 5,5,5)
+  end
+
+  def action_selection_open_link_external
+    return unless selected_tweet.is_tweet?
+    Launchy.open(selected_tweet.root_tweet.url)
+    set_notice('OPENING TWEET IN BROWSER...', 5,5,5)
+  end
+
+  def action_detail_panel_mode
+    switch_mode(:detail)
   end
 
   def action_quit

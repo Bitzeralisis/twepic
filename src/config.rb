@@ -54,7 +54,9 @@ class Config
             'd'.ord => :selection_delete,
             'y'.ord => :selection_copy_text,
             'Y'.ord => :selection_copy_link,
+            'O'.ord => :selection_open_link_external,
 
+            9       => :detail_panel_mode,
             'Q'.ord => :quit,
         },
 

@@ -132,9 +132,10 @@ class TweetStore
             @profile_urls[id] = url
             @profile_images[id] = image
           end
-        rescue
+        rescue => e
           # Something went wrong, probably failed to get an image or something
           # TODO: Requeue with limited retries
+          $logger.error(e)
           @profile_urls.delete(id)
           @profile_images.delete(id)
         end
@@ -148,11 +149,31 @@ class TweetView
 
   def initialize(parent)
     streaming = StreamLine.new(parent)
+    @parent = parent
     @tweets = [streaming]
   end
 
   def <<(tweetline)
-    @tweets.insert(-2, tweetline)
+    if true
+      @tweets.insert(-2, tweetline)
+    else
+      # Code that automatically puts consequtive RTs into a fold. Currently not in use
+      last = @tweets[-2] # Ignore the streaming spinner
+      if (tweetline.is_tweet? and tweetline.retweet?) and
+         ((last and last.is_tweet? and last.retweet?) or
+           last.instance_of? FoldLine)
+        if last.instance_of? FoldLine
+          last << tweetline
+        else
+          fold = FoldLine.new(@parent)
+          fold << last
+          fold << tweetline
+          @tweets[-2] = fold
+        end
+      else
+        @tweets.insert(-2, tweetline)
+      end
+    end
   end
 
   def [](*args)
@@ -165,6 +186,10 @@ class TweetView
 
   def each
     @tweets.each { |t| yield(t) }
+  end
+
+  def find_index
+    @tweets.find_index { |t| yield(t) }
   end
 
   def size

@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 
+require 'clipboard'
+require 'launchy'
 require 'twitter'
 require 'twitter-text'
 require 'unicode_utils'
@@ -8,6 +10,26 @@ require_relative 'tweetstore'
 require_relative 'world/world'
 
 require_relative 'panel_set_consume_input'
+
+class Panel < Thing
+
+  attr_reader :focused
+
+  def initialize
+    super
+    @focused = false
+  end
+
+  def focused=(rhs)
+    @focused = rhs
+    flag_redraw
+  end
+
+  def consume_input(input)
+    false
+  end
+
+end
 
 class PanelSet < ThingContainer
 
@@ -44,12 +66,14 @@ class PanelSet < ThingContainer
     @time = 0
 
     @title_panel = TitlePanel.new(@clients)
-    @tweets_panel = TweetsPanel.new(@tweetstore)
+    @tweets_panel = TweetsPanel.new(@tweetstore, @title_panel)
     @detail_panel = DetailPanel.new(@config, @tweetstore)
     @notice_panel = NoticePanel.new(@detail_panel)
     @post_panel = PostPanel.new
     @confirm_panel = ConfirmPanel.new
     @events_panel = EventsPanel.new(@clients, @config)
+
+    focus_panel(@tweets_panel)
 
     self << @title_panel
     self << @tweets_panel
@@ -84,6 +108,7 @@ class PanelSet < ThingContainer
     @time += time
 
     # Consume events from streaming
+    # TODO: Probably should move all this stuff into TweetStore
     until @clients.stream_queue.empty?
       event = @clients.stream_queue.pop
       @events_panel.add_incoming_event(event)
@@ -141,13 +166,15 @@ class PanelSet < ThingContainer
     while true
       input = world.getch
       break if input == -1
-      case @mode
-        when :timeline
-          timeline_consume_input(input)
-        when :post
-          post_consume_input(input)
-        when :confirm
-          confirm_consume_input(input)
+      unless @focused_panel.consume_input(input)
+        case @mode
+          when :timeline, :detail
+            timeline_consume_input(input)
+          when :post
+            post_consume_input(input)
+          when :confirm
+            confirm_consume_input(input)
+        end
       end
     end
 
@@ -166,19 +193,34 @@ class PanelSet < ThingContainer
     world.rerender
   end
 
-  private
+  def focus_panel(panel)
+    if @focused_panel != panel
+      @focused_panel.focused = false if @focused_panel
+      @focused_panel = panel
+      @focused_panel.focused = true
+    end
+  end
 
   def switch_mode(mode)
+    return switch_mode(@prev_mode) if @prev_mode and mode == :previous_mode
+
+    @post_panel.visible = false
+    @confirm_panel.visible = false
+
+    @prev_mode = @mode
     @mode = mode
     case mode
       when :timeline
-        @post_panel.visible = false
-        @confirm_panel.visible = false
+        focus_panel(@tweets_panel)
         @detail_panel.flag_rerender
       when :post
+        focus_panel(@post_panel)
         @post_panel.visible = true
       when :confirm
+        focus_panel(@confirm_panel)
         @confirm_panel.visible = true
+      when :detail
+        focus_panel(@detail_panel)
     end
   end
 
@@ -188,6 +230,10 @@ class PanelSet < ThingContainer
 
   def scroll_top(index)
     @tweets_panel.scroll_top(index)
+  end
+
+  def set_notice(*args)
+    @notice_panel.set_notice(*args)
   end
 
   def post_tweet
@@ -227,17 +273,18 @@ class PanelSet < ThingContainer
 
 end
 
-class TweetsPanel < Thing
+class TweetsPanel < Panel
 
   include HasPad
   include PadHelpers
 
-  def initialize(tweetstore)
+  def initialize(tweetstore, title_panel)
     super()
     self.size = screen_width, screen_height-15
 
     @tweetstore = tweetstore
     @tweetview = @tweetstore.create_view(self)
+    @title_panel = title_panel
 
     @prev_top = -1
     @next_top = 0
@@ -247,6 +294,11 @@ class TweetsPanel < Thing
     @prev_last_visible_y = -1
 
     @time = 0
+  end
+
+  def focused=(rhs)
+    super
+    @title_panel.focused=(rhs)
   end
 
   def selected_tweet
@@ -299,14 +351,12 @@ class TweetsPanel < Thing
 
         if selected_tweet.is_tweet?
           # Retweet of tweet
-          if tl.retweet? and
-              (tl.tweet.retweeted_tweet.id == selected_tweet.tweet.retweeted_tweet.id or
-                  tl.tweet.retweeted_tweet.id == selected_tweet.tweet.id)
+          if tl.retweet? and tl.root_tweet.id == selected_tweet.root_tweet.id
             tl.set_relations(:retweet_of_tweet)
           end
 
           # Original of retweet
-          if selected_tweet.retweet? and selected_tweet.tweet.retweeted_tweet.id == tl.tweet.id
+          if selected_tweet.retweet? and selected_tweet.root_tweet.id == tl.tweet.id
             tl.set_relations(:original_of_retweet)
           end
 
@@ -409,7 +459,7 @@ class TweetsPanel < Thing
 
 end
 
-class TitlePanel < Thing
+class TitlePanel < Panel
 
   include HasPad
   include PadHelpers
@@ -423,14 +473,17 @@ class TitlePanel < Thing
   def redraw
     pad.erase
 
-    pad.color(0,1,1,0, :bold, :reverse)
+    color1 = @focused ? [ 0,1,1,1, :bold, :reverse ] : [ 0,0,0,1, :bold, :reverse ]
+    color2 = @focused ? [ 0,1,1,0, :bold, :reverse ] : [ 0,0,0,1, :bold, :reverse ]
+
+    pad.color(*color2)
     pad.write(3, 1, ' TIMELINE ')
 
     user = " CURRENT USER: @#{@clients.user.screen_name} "
-    pad.color(0,1,1,0, :bold, :reverse)
+    pad.color(*color2)
     pad.write(size.x - user.length - 3, 1, user)
 
-    pad.color(0,1,1,1, :bold, :reverse)
+    pad.color(*color1)
     pad.write(0, 2, ''.ljust(size.x))
     pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn], 2, 'USER')
     pad.write(ColumnDefinitions::COLUMNS[:TweetColumn], 2, 'TWEET')
@@ -448,7 +501,7 @@ class TitlePanel < Thing
 
 end
 
-class DetailPanel < Thing
+class DetailPanel < Panel
 
   include HasPad
   include PadHelpers
@@ -464,10 +517,79 @@ class DetailPanel < Thing
   end
 
   def tick(time)
-    if @tweetline != @prev_tweetline or any_profile_image_changed?
+    if @tweetline != @prev_tweetline
       @prev_tweetline = @tweetline
+      if @tweetline.is_tweet?
+        @linking_tweet_pieces = @tweetline.tweet_pieces.select { |piece| [ :mention_username, :hashtag, :link_domain ].include? piece.type }
+        @selected_entity_index = 0
+      end
       flag_redraw
     end
+    flag_redraw if any_profile_image_changed?
+  end
+
+  def consume_input(input)
+    case input
+      when 9, 27 # Tab, Esc
+        @parent.switch_mode(:timeline)
+      when 'h'.ord, 4 # Left
+        @selected_entity_index = @selected_entity_index <= 0 ? @linking_tweet_pieces.size-1 : @selected_entity_index-1
+        flag_redraw
+      when 'l'.ord, 5 # Right
+        @selected_entity_index = @selected_entity_index >= @linking_tweet_pieces.size-1 ? 0 : @selected_entity_index+1
+        flag_redraw
+      when 'y'.ord
+        selected_piece = @linking_tweet_pieces[@selected_entity_index]
+        if selected_piece
+          case selected_piece.type
+            when :mention_username
+              Clipboard.copy("@#{selected_piece.entity.screen_name}")
+              @parent.set_notice('COPIED USERNAME', 5,5,5)
+            when :hashtag
+              Clipboard.copy("\##{selected_piece.entity.text}")
+              @parent.set_notice('COPIED HASHTAG', 5,5,5)
+            when :link_domain
+              Clipboard.copy(selected_piece.entity.url)
+              @parent.set_notice('COPIED LINK', 5,5,5)
+          end
+        else
+          return false
+        end
+      when 'Y'.ord
+        selected_piece = @linking_tweet_pieces[@selected_entity_index]
+        if selected_piece
+          case selected_piece.type
+            when :mention_username
+              Clipboard.copy("https://twitter.com/#{selected_piece.entity.screen_name}")
+              @parent.set_notice('COPIED LINK TO USER', 5,5,5)
+            when :hashtag
+              Clipboard.copy(selected_piece.entity.text)
+              @parent.set_notice('COPIED HASHTAG TEXT', 5,5,5)
+            when :link_domain
+              Clipboard.copy(selected_piece.entity.expanded_url)
+              @parent.set_notice('COPIED FULL LINK', 5,5,5)
+          end
+        else
+          return false
+        end
+      when 'O'.ord
+        selected_piece = @linking_tweet_pieces[@selected_entity_index]
+        if selected_piece
+          case selected_piece.type
+            when :mention_username
+              Launchy.open("https://twitter.com/#{selected_piece.entity.screen_name}")
+              @parent.set_notice('OPENING USER IN BROWSER...', 5,5,5)
+            when :link_domain
+              Launchy.open(selected_piece.entity.expanded_url)
+              @parent.set_notice('OPENING LINK IN BROWSER...', 5,5,5)
+          end
+        else
+          return false
+        end
+      else
+        return false
+    end
+    true
   end
 
   def redraw
@@ -475,13 +597,14 @@ class DetailPanel < Thing
     stop_watching_all_profile_images
 
     # Draw the infobar
-    pad.color(0,0,0,1, :bold, :reverse)
+    color = @focused ? [ 0,1,1,1, :reverse ] : [ 0,0,0,1, :reverse ]
+    pad.color(*color, :bold)
     pad.write(0, 0, ''.ljust(size.x))
 
     unless @tweetline.is_tweet?
       text = ' NO TWEET SELECTED '
       xPos = (size.x - text.size) / 2
-      pad.color(0,0,0,1, :reverse)
+      pad.color(*color)
       pad.write(xPos, 0, text)
       return
     end
@@ -529,30 +652,38 @@ class DetailPanel < Thing
 
     xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
     yPos = 2
+
     @tweetline.tweet_pieces.each do |piece|
-      color_code = @config.tweet_colors_detail(piece.type)
-      case color_code[0]
-        when :none
-          nil
-        when :username
-          name = piece.text
-          profile_image = get_and_watch_profile_image(piece.entity)
-          UsernameColumn.draw_username(pad, xPos, yPos, name, profile_image, *color_code[1..-1])
-          xPos += piece.text_width
-        when :whitespace
-          pad.color(*color_code[1..-1])
-          if piece.entity.data == :tab
-            xPos += 2
-          end
-          pad.write(xPos, yPos, piece.text)
-          if piece.entity.data == :newline
-            xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
-            yPos += 1
-          end
-        else
-          pad.color(*color_code)
-          pad.write(xPos, yPos, piece.text)
-          xPos += piece.text_width
+      if @focused and !@linking_tweet_pieces.empty? and
+          @linking_tweet_pieces[@selected_entity_index].grouped_with.include?(piece)
+        pad.color(1,1,1,1, :bold, :reverse)
+        pad.write(xPos, yPos, piece.text)
+        xPos += piece.text_width
+      else
+        color_code = @config.tweet_colors_detail(piece.type)
+        case color_code[0]
+          when :none
+            nil
+          when :username
+            name = piece.text
+            profile_image = get_and_watch_profile_image(piece.entity)
+            UsernameColumn.draw_username(pad, xPos, yPos, name, profile_image, *color_code[1..-1])
+            xPos += piece.text_width
+          when :whitespace
+            pad.color(*color_code[1..-1])
+            if piece.entity.data == :tab
+              xPos += 2
+            end
+            pad.write(xPos, yPos, piece.text)
+            if piece.entity.data == :newline
+              xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
+              yPos += 1
+            end
+          else
+            pad.color(*color_code)
+            pad.write(xPos, yPos, piece.text)
+            xPos += piece.text_width
+        end
       end
     end
 
@@ -570,7 +701,7 @@ class DetailPanel < Thing
 
 end
 
-class PostPanel < Thing
+class PostPanel < Panel
 
   include HasPad
   include PadHelpers
@@ -623,15 +754,16 @@ class PostPanel < Thing
     pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, 3, @reply_to ? ' COMPOSE REPLY ' : ' COMPOSE UPDATE ')
 
     # Render the post
+    display = "#{@post.gsub("\n", '↵ ')}␣"
     pad.color(1,1,1,1)
-    pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn], 5, @post)
+    pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn], 5, display)
     pad.bold
     pad.write(ColumnDefinitions::COLUMNS[:SelectionColumn], 5, '  >')
   end
 
   def rerender
     if @reply_to
-      rerender_pad
+      rerender_pad(Coord.new(0, 1), Coord.new(size.x, size.y-1))
     else
       rerender_pad(Coord.new(0, 2), Coord.new(size.x, size.y-2))
     end
@@ -645,7 +777,7 @@ class PostPanel < Thing
 
 end
 
-class NoticePanel < Thing
+class NoticePanel < Panel
 
   include HasPad
   include PadHelpers
@@ -690,7 +822,7 @@ class NoticePanel < Thing
 
   def rerender
     return if @time >= @start_time+FADE_TIME
-    rerender_pad
+    rerender_pad(Coord.new((size.x-@text.length)/2 - 5, 0), Coord.new(@text.length+10, 1))
   end
 
   def flag_rerender(rerender = true)
@@ -705,7 +837,7 @@ class NoticePanel < Thing
 
 end
 
-class ConfirmPanel < Thing
+class ConfirmPanel < Panel
 
   include HasPad
   include PadHelpers
@@ -751,7 +883,7 @@ class ConfirmPanel < Thing
   end
 
   def rerender
-    rerender_pad
+    rerender_pad(Coord.new(0, 1), Coord.new(size.x, size.y-1))
   end
 
   def on_resize(old_size, new_size)
@@ -762,7 +894,7 @@ class ConfirmPanel < Thing
 
 end
 
-class EventsPanel < Thing
+class EventsPanel < Panel
 
   module Event
     attr_accessor :event, :display, :size, :x, :stopped, :decay
