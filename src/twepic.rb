@@ -7,7 +7,7 @@ require 'twitter_oauth'
 require_relative 'auth'
 require_relative 'config'
 require_relative 'clients'
-require_relative 'panels'
+require_relative 'panels/panel_set'
 require_relative 'world/world'
 
 module TwepicRc

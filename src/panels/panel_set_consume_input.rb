@@ -1,11 +1,9 @@
-#!/usr/bin/env ruby
-
 require 'clipboard'
 require 'launchy'
 
-class PanelSet < ThingContainer
+module PanelSetConsumeInput
 
-  def timeline_consume_input(input)
+  def consume_input(input)
     case input
       # Mouse control
       when Ncurses::KEY_MOUSE
@@ -33,67 +31,6 @@ class PanelSet < ThingContainer
         elsif action.is_a? Hash
           @header = input
         end
-    end
-  end
-
-  def post_consume_input(input)
-    case input
-
-      when Ncurses::KEY_MOUSE
-        nil
-
-      # Ctrl-w
-      when 23
-        # Delete a word
-        index = @post.rindex(/\b\w+/)
-        @post = @post[0...index] if index
-
-      # Esc
-      when 27
-        # Exit post mode
-        @post = ''
-        switch_mode(:previous_mode)
-
-      # Backspace
-      when 127
-        # Delete a character
-        @post = @post[0..-2]
-
-      # Return
-      when "\r".ord
-        # If there's a backslash at the end, remove the backslash and insert a newline
-        if @post[-1] == "\\"
-          @post[-1] = "\n"
-        else
-          # Else post the tweet
-          post_tweet
-          @post = ''
-          switch_mode(:previous_mode)
-        end
-
-      when Ncurses::KEY_MOUSE
-        mouse_event = Ncurses::MEVENT.new
-        Ncurses::getmouse(mouse_event)
-        # @post += mouse_event.bstate.to_s + ' '
-
-      else
-        # Every other input is just a character in the post
-        @post += input.chr(Encoding::UTF_8)
-    end
-  end
-
-  def confirm_consume_input(input)
-    if @confirm_keys.include?(input)
-      case @confirm_action
-        when :retweet
-          @clients.rest_concurrently(:retweet, selected_tweet.tweet.id) { |rest, id| rest.retweet(id) }
-          switch_mode(:previous_mode)
-        when :delete
-          @clients.rest_concurrently(:delete, selected_tweet.tweet.id) { |rest, id| rest.destroy_status(id) }
-          switch_mode(:previous_mode)
-      end
-    elsif @deny_keys.include?(input)
-      switch_mode(:previous_mode)
     end
   end
 
@@ -179,17 +116,16 @@ class PanelSet < ThingContainer
   end
 
   def action_compose_tweet
+    @post_panel.set_target(post: '', reply_to: nil)
     switch_mode(:post)
-    @reply_to = nil
   end
 
   def action_compose_selection_reply(to_all = false)
     return unless selected_tweet.is_tweet? # Do nothing when following stream
-    switch_mode(:post)
 
     # When replying to a retweet, we reply to the retweeted status, not the status that is a retweet
     reply_tweetline = selected_tweet
-    @reply_to =
+    reply_to =
         if reply_tweetline.retweet?
           reply_tweetline.tweet.retweeted_status
         else
@@ -198,17 +134,20 @@ class PanelSet < ThingContainer
 
     # Populate the tweet with the @names of people being replied to
     if to_all # Also include @names of every person mentioned in the tweet
-      mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(@reply_to.text)
+      mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(reply_to.text)
       mentioned_users = mentioned_users.uniq
-      mentioned_users.delete(@reply_to.user.screen_name)
-      mentioned_users.unshift(@reply_to.user.screen_name)
+      mentioned_users.delete(reply_to.user.screen_name)
+      mentioned_users.unshift(reply_to.user.screen_name)
       mentioned_users.delete(@clients.user.screen_name)
       mentioned_users << reply_tweetline.tweet.user.screen_name if reply_tweetline.retweet?
       mentioned_users.map! { |u| "@#{u}" }
-      @post = "#{mentioned_users.join(' ')} "
+      post = "#{mentioned_users.join(' ')} "
     else # Only have @name of the user of the tweet
-      @post = "@#{@reply_to.user.screen_name} "
+      post = "@#{reply_to.user.screen_name} "
     end
+
+    @post_panel.set_target(post: post, reply_to: reply_to)
+    switch_mode(:post)
   end
 
   def action_compose_selection_reply_to_all
@@ -230,20 +169,24 @@ class PanelSet < ThingContainer
   def action_selection_retweet
     return unless selected_tweet.is_tweet? # Do nothing when following stream
     switch_mode(:confirm)
-    @confirm_action = :retweet
-    @confirm_keys = [ 'y'.ord, 'Y'.ord, 'e'.ord, '\r'.ord ]
-    @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
-    @confirm_text = 'Really retweet this tweet? eyY/nN'
+    @confirm_panel.set_action(
+        action_type: :retweet,
+        action_text: 'Really retweet this tweet? eyY/nN',
+        confirm_keys: [ 'y'.ord, 'Y'.ord, 'e'.ord, '\r'.ord ],
+        deny_keys: [ 'n'.ord, 'N'.ord, 27 ] # Esc
+    )
   end
 
   def action_selection_delete
     return unless selected_tweet.is_tweet? # Do nothing when following stream
     return unless selected_tweet.tweet.user.id == @clients.user.id # Must be own tweet
     switch_mode(:confirm)
-    @confirm_action = :delete
-    @confirm_keys = [ 'y'.ord, 'Y'.ord, 'd'.ord, '\r'.ord ]
-    @deny_keys = [ 'n'.ord, 'N'.ord, 27 ] # Esc
-    @confirm_text = 'Really delete this tweet? dyY/nN'
+    @confirm_panel.set_action(
+        action_type: :delete,
+        action_text: 'Really delete this tweet? dyY/nN',
+        confirm_keys: [ 'y'.ord, 'Y'.ord, 'd'.ord, '\r'.ord ],
+        deny_keys: [ 'n'.ord, 'N'.ord, 27 ] # Esc
+    )
   end
 
   def action_selection_copy_text
