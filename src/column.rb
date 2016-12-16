@@ -130,6 +130,11 @@ class FlagsColumn < Column
     @clip = Coord.new(@f1 ? 0 : 1)
   end
 
+  def flag_redraw(redraw = true)
+    super
+    @parent.flag_rerender
+  end
+
 end
 
 class UsernameColumn < Column

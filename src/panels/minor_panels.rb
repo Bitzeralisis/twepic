@@ -85,7 +85,7 @@ class EventsPanel < Panel
     def initialize(event_type, display, right)
       @event = event_type
       @display = display
-      @size = @display[0].length + PADDING
+      @size = @display[0].length == 0 ? 0 : @display[0].length + PADDING
       @x = right
       @stopped = false
       @decay = 0
@@ -146,7 +146,9 @@ class EventsPanel < Panel
     # Add new outgoing events
     old_size = @events_out.size
     @clients.outgoing_requests.each do |r|
-      @events_out[r] = OutEvent.new(r, @config.event_out_display(r.name)) unless @events_out[r]
+      existing_event = @events_out[r]
+      display = @config.event_out_display(r.name)
+      @events_out[r] = OutEvent.new(r, display) unless existing_event || display.nil?
     end
     flag_redraw if old_size != @events_out.size
 

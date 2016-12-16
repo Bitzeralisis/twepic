@@ -137,7 +137,7 @@ class DetailPanel < Panel
       UsernameColumn.draw_username(pad, ColumnDefinitions::COLUMNS[:UsernameColumn], 0, name, profile_image, :bold)
     end
 
-    favs = 5,0,0, @tweetline.root_tweet.favorite_count == 0 ? '' : " ♥ #{@tweetline.root_tweet.favorite_count} "
+    favs = 5,0,0, @tweetline.root_twepic_tweet.favorites == 0 ? '' : " ♥ #{@tweetline.root_twepic_tweet.favorites} "
     rts = 0,5,0, @tweetline.root_tweet.retweet_count == 0 ? '' : " ⟳ #{@tweetline.root_tweet.retweet_count} "
     time = 1,1,1,1, @tweetline.root_tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
     source = 1,1,1,1, " #{@tweetline.root_tweet.source.gsub(/<.*?>/, '')} "

@@ -2,6 +2,7 @@
 
 require 'open-uri'
 require 'rmagick'
+require 'twitter'
 
 class TweetStore
 
@@ -13,8 +14,8 @@ class TweetStore
     @config = config
     @clients = clients
 
-    @tweets = []
     @tweets_index = {}
+    @retweets_index = {}
     @reply_tree_node = nil
     @reply_tree = []
 
@@ -28,36 +29,42 @@ class TweetStore
 
   # "Overrides" for Array and Hash methods so TweetStore can be treated like one
 
-  def <<(tweetline)
-    @tweets << tweetline
-    @tweets_index[tweetline.tweet.id] = tweetline
-    @views.each { |v| v << tweetline }
-  end
+  def <<(tweet)
+    case tweet
+      when TwepicTweet
+        id = tweet.tweet.id
+        if @tweets_index[id]
+          @views.each { |v| v.each { |tl| tl.underlying_tweet_changed if tl.is_tweet? && tl.tweet.id == id } }
+          (@retweets_index[id] || []).each { |t| t.retweeted_tweet_changed }
+        end
+        @tweets_index[id] = tweet
 
-  def [](*args)
-    @tweets[*args]
+        if tweet.retweet?
+          rt_id = tweet.tweet.retweeted_tweet.id
+          @retweets_index[rt_id] ||= []
+          @retweets_index[rt_id] << tweet
+        end
+
+      when TweetLine
+        @views.each { |v| v << tweet }
+    end
   end
 
   def delete_id(id)
-    @tweets.delete_if { |tl| tl.tweet.id == id }
-    @tweets_index.delete(id)
     @views.each { |v| v.delete_if { |tl| tl.is_tweet? && tl.tweet.id == id } }
+    @tweets_index.delete(id)
   end
 
   def each
-    @tweets.each { |t| yield(t) }
+    @tweets_index.each_value { |t| yield(t) }
   end
 
   def fetch(id)
     @tweets_index[id]
   end
 
-  def find_index
-    @tweets.find_index { |t| yield(t) }
-  end
-
   def size
-    @tweets.size
+    @tweets_index.size
   end
 
   # Actual methods that do stuff
@@ -79,12 +86,13 @@ class TweetStore
   def rebuild_reply_tree(*args)
     # Use the passed TL as the node to build the reply tree one
     # If not passed anything, use the previously used TL
-    tl = @reply_tree_node if args.size == 0
-    tl ||= args[0]
-    @reply_tree_node = tl
+    tweet = @reply_tree_node if args.size == 0
+    tweet ||= args[0]
+    tweet = tweet.underlying_tweet if tweet.instance_of? TweetLine
+    @reply_tree_node = tweet
 
     # Put entire child tree in
-    @reply_tree = [tl]
+    @reply_tree = [tweet]
     @reply_tree.each do |r|
       r.replies_to_this.each do |t|
         @reply_tree << t unless @reply_tree.include?(t)
@@ -92,7 +100,7 @@ class TweetStore
     end
 
     # Add only path to root node of tree
-    current_tweet = tl
+    current_tweet = tweet
     while current_tweet.tweet.reply?
       t = fetch(current_tweet.tweet.in_reply_to_status_id)
       break unless t
@@ -226,3 +234,4 @@ module ProfileImageWatcher
   end
 
 end
+

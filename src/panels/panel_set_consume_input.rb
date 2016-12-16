@@ -125,12 +125,7 @@ module PanelSetConsumeInput
 
     # When replying to a retweet, we reply to the retweeted status, not the status that is a retweet
     reply_tweetline = selected_tweet
-    reply_to =
-        if reply_tweetline.retweet?
-          reply_tweetline.tweet.retweeted_status
-        else
-          reply_tweetline.tweet
-        end
+    reply_to = reply_tweetline.root_tweet
 
     # Populate the tweet with the @names of people being replied to
     if to_all # Also include @names of every person mentioned in the tweet
@@ -141,7 +136,7 @@ module PanelSetConsumeInput
       mentioned_users.delete(@clients.user.screen_name)
       mentioned_users << reply_tweetline.tweet.user.screen_name if reply_tweetline.retweet?
       mentioned_users.map! { |u| "@#{u}" }
-      post = "#{mentioned_users.join(' ')} "
+      post = mentioned_users.empty? ? '' : "#{mentioned_users.join(' ')} "
     else # Only have @name of the user of the tweet
       post = "@#{reply_to.user.screen_name} "
     end

@@ -137,7 +137,7 @@ class TweetsPanel < Panel
           end
 
           # Tweet in replied-to chain
-          if @tweetstore.reply_tree.size > 1 and @tweetstore.reply_tree.include?(tl)
+          if @tweetstore.reply_tree.size > 1 and @tweetstore.reply_tree.include?(tl.underlying_tweet)
             if tl.tweet.user.id == selected_tweet.tweet.user.id
               tl.set_relations(:reply_tree_same_user)
             else

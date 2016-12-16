@@ -61,6 +61,7 @@ class Config
         },
 
         event_in_display: {
+            nil:        ['', 0],
             tweet:      ['T', 0,0,0,1],
             reply:      ['R', 5,4,3, :bold],
             favorite:   ['L', 5,0,0, :bold],
@@ -72,6 +73,7 @@ class Config
         },
 
         event_out_display: {
+            nil:        ['', 0],
             tweet:      ['TWEET',  3,5,5],
             reply:      ['REPLY',  5,4,3],
             favorite:   ['LIKE',   5,3,3],

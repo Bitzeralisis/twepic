@@ -7,6 +7,7 @@ require_relative 'tweets_panel'
 require_relative 'detail_panel'
 require_relative 'post_panel'
 require_relative 'minor_panels'
+require_relative '../tweet'
 require_relative '../tweetline'
 require_relative '../tweetstore'
 require_relative '../world/world'
@@ -143,27 +144,26 @@ class PanelSet < ThingContainer
     @time += time
 
     # Consume events from streaming
-    # TODO: Probably should move all this stuff into TweetStore
     until @clients.stream_queue.empty?
       event = @clients.stream_queue.pop
       @events_panel.add_incoming_event(event)
       case event
         when Twitter::Tweet
-          # TODO: Deal with duplicates
-          # TODO: When it's a retweet of your own tweet, carry over fav and rt count from orig tweet
-          # TODO: When it's a retweet of your own tweet, increment your tweet's rt count and the rt count of every rt of that tweet.
-          # TODO: Link all RTs of a tweet together somehow?
+          # TODO: Seperate adding to store and adding to views; perhaps don't add duplicates to views
           # If we can scroll down one tweet without the selection arrow
           # disappearing, then do so, but only if the view is full
-          scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y - 1 == @tweetstore.size
-          @tweetstore << TweetLine.new(@tweets_panel, @tweetstore, event, @time)
+          scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y == tweetview.size
+          @tweetstore << TwepicTweet.new(event.retweeted_tweet, @tweetstore) if event.retweet?
+          tweet = TwepicTweet.new(event, @tweetstore)
+          @tweetstore << tweet
+          @tweetstore << TweetLine.new(@tweets_panel, tweet, @time)
           # If the selection arrow was on the streaming spinner, then follow it
-          select_tweet(selected_index+1) if selected_index == @tweetstore.size-1
+          select_tweet(selected_index+1) if selected_index == tweetview.size-2
 
         when Twitter::Streaming::DeletedTweet
           @tweetstore.delete_id(event.id)
-          # TODO: Instead of just shifting everything up, attempt to keep @selected on the same
-          #       tweet if possible
+          # TODO: Instead of shifting everything up, attempt to keep @selected on the same y-position
+          # TODO: Decrement retweet count of deleted retweets' root tweets
           select_tweet(selected_index)
 
         when Twitter::Streaming::Event
@@ -173,15 +173,14 @@ class PanelSet < ThingContainer
             when :block, :unblock
               nil
             when :favorite, :unfavorite
-              # TODO: Also change favorited/favorites of all rts of that tweet
-              tweetline = @tweetstore.fetch(event.target_object.id)
-              if tweetline
+              tweet = @tweetstore.fetch(event.target_object.id)
+              if tweet
                 if event.target_object.user.id == @clients.user.id
-                  tweetline.favorites += 1 if event.name == :favorite
-                  tweetline.favorites -= 1 if event.name == :unfavorite
+                  tweet.favorites += 1 if event.name == :favorite
+                  tweet.favorites -= 1 if event.name == :unfavorite
                 else
-                  tweetline.favorited = true if event.name == :favorite
-                  tweetline.favorited = false if event.name == :unfavorite
+                  tweet.favorited = true if event.name == :favorite
+                  tweet.favorited = false if event.name == :unfavorite
                 end
               end
             when :follow, :unfollow
