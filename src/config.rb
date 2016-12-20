@@ -56,6 +56,12 @@ class Config
             'Y'.ord => :selection_copy_link,
             'O'.ord => :selection_open_link_external,
 
+            'H'.ord => :tab_select_left,
+            'L'.ord => :tab_select_right,
+            'w'.ord => :tab_delete,
+            'u'.ord => :selection_new_tab_user_tweets,
+            'o'.ord => :selection_new_tab_related_tweets,
+
             9       => :detail_panel_mode,
             'Q'.ord => :quit,
         },

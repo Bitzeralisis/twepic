@@ -21,6 +21,7 @@ class PanelSet < ThingContainer
 
   attr_reader :clients
   attr_reader :config
+  attr_reader :tabs
   attr_reader :time
   attr_reader :tweetstore
   attr_reader :world
@@ -48,6 +49,10 @@ class PanelSet < ThingContainer
     @post_panel = PostPanel.new
     @confirm_panel = ConfirmPanel.new
     @events_panel = EventsPanel.new(@clients, @config)
+
+    @stream_tab = @tweets_panel.tweetview
+    @tabs = [ @stream_tab ]
+    @current_tab = 0
 
     focus_panel(@tweets_panel)
 
@@ -128,6 +133,11 @@ class PanelSet < ThingContainer
     end
   end
 
+  def switch_tab(tab_index)
+    @current_tab = tab_index
+    @tweets_panel.tweetview = @tabs[@current_tab]
+  end
+
   def top
     @tweets_panel.top
   end
@@ -149,16 +159,15 @@ class PanelSet < ThingContainer
       @events_panel.add_incoming_event(event)
       case event
         when Twitter::Tweet
-          # TODO: Seperate adding to store and adding to views; perhaps don't add duplicates to views
           # If we can scroll down one tweet without the selection arrow
           # disappearing, then do so, but only if the view is full
-          scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y == tweetview.size
+          scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y == tweetview.size if tweetview == @stream_tab
           @tweetstore << TwepicTweet.new(event.retweeted_tweet, @tweetstore) if event.retweet?
           tweet = TwepicTweet.new(event, @tweetstore)
           @tweetstore << tweet
-          @tweetstore << TweetLine.new(@tweets_panel, tweet, @time)
+          @stream_tab << TweetLine.new(@tweets_panel, tweet, @time)
           # If the selection arrow was on the streaming spinner, then follow it
-          select_tweet(selected_index+1) if selected_index == tweetview.size-2
+          select_tweet(selected_index+1) if selected_index == tweetview.size-2 if tweetview == @stream_tab
 
         when Twitter::Streaming::DeletedTweet
           @tweetstore.delete_id(event.id)

@@ -202,6 +202,48 @@ module PanelSetConsumeInput
     set_notice('OPENING TWEET IN BROWSER...', 5,5,5)
   end
 
+  def action_tab_select_left
+    switch_tab(@current_tab == 0 ? @tabs.size-1 : @current_tab-1)
+  end
+
+  def action_tab_select_right
+    switch_tab(@current_tab == @tabs.size-1 ? 0 : @current_tab+1)
+  end
+
+  def action_tab_delete
+    return if @current_tab == 0
+    @tabs.delete_at(@current_tab)
+    switch_tab(@current_tab == @tabs.size ? @current_tab-1 : @current_tab)
+  end
+
+  def action_selection_new_tab_user_tweets
+    return unless selected_tweet.is_tweet?
+
+    selected = selected_tweet
+    view = TweetView.new(@tweets_panel, "USER: @#{selected.tweet.user.screen_name}")
+    @tweetstore.each { |tt| view << TweetLine.new(@tweets_panel, tt, @time-1000) if tt.tweet.user.id == selected.tweet.user.id }
+    index = view.find_index { |tl| tl.tweet.id == selected.tweet.id }
+    view.select_tweet(index, @tweets_panel.size.y)
+    @tweetstore.attach_view(view)
+    @tabs << view
+    switch_tab(@tabs.size-1)
+  end
+
+  def action_selection_new_tab_related_tweets
+    return unless selected_tweet.is_tweet?
+
+    return action_selection_new_tab_user_tweets if @tweetstore.reply_tree.size == 1
+
+    selected = selected_tweet
+    view = TweetView.new(@tweets_panel, 'REPLY TREE')
+    @tweetstore.reply_tree.each { |tt| view << TweetLine.new(@tweets_panel, tt, @time-1000) }
+    index = view.find_index { |tl| tl.tweet.id == selected.tweet.id }
+    view.select_tweet(index, @tweets_panel.size.y)
+    @tweetstore.attach_view(view)
+    @tabs << view
+    switch_tab(@tabs.size-1)
+  end
+
   def action_detail_panel_mode
     switch_mode(:detail)
   end

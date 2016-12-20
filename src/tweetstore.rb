@@ -27,8 +27,6 @@ class TweetStore
     @profile_image_worker = Thread.new { profile_image_worker(@profile_image_requests) }
   end
 
-  # "Overrides" for Array and Hash methods so TweetStore can be treated like one
-
   def <<(tweet)
     case tweet
       when TwepicTweet
@@ -46,7 +44,7 @@ class TweetStore
         end
 
       when TweetLine
-        @views.each { |v| v << tweet }
+        # @views.each { |v| v << tweet }
     end
   end
 
@@ -69,10 +67,8 @@ class TweetStore
 
   # Actual methods that do stuff
 
-  def create_view(parent)
-    view = TweetView.new(parent)
+  def attach_view(view)
     @views << view
-    view
   end
 
   def check_profile_image(user)
@@ -84,7 +80,7 @@ class TweetStore
   end
 
   def rebuild_reply_tree(*args)
-    # Use the passed TL as the node to build the reply tree one
+    # Use the passed TL as the node to build the reply tree on
     # If not passed anything, use the previously used TL
     tweet = @reply_tree_node if args.size == 0
     tweet ||= args[0]
@@ -155,10 +151,72 @@ end
 
 class TweetView
 
-  def initialize(parent)
-    streaming = StreamLine.new(parent)
+  attr_reader :name
+  attr_reader :selected
+  attr_reader :top
+
+  def initialize(parent, name)
     @parent = parent
-    @tweets = [streaming]
+    @name = name
+    @tweets = []
+
+    @selected = 0
+    @top = 0
+  end
+
+  def <<(tweetline)
+    @tweets << tweetline
+  end
+
+  def [](*args)
+    @tweets[*args]
+  end
+
+  def delete_if
+    @tweets.delete_if { |t| yield(t) }
+  end
+
+  def each
+    @tweets.each { |t| yield(t) }
+  end
+
+  def find_index
+    @tweets.find_index { |t| yield(t) }
+  end
+
+  def scroll_top(index, height, force_select_in_visible = false)
+    @top = [ 0, [ index, size-1 ].min ].max
+    if force_select_in_visible
+      if @selected >= @top + height
+        select_tweet(@top + height - 1, height)
+      elsif @selected < @top
+        select_tweet(@top, height)
+      end
+    end
+  end
+
+  def select_tweet(index, height, force_scroll = true)
+    @selected = [ 0, [ index, size-1 ].min ].max
+    if force_scroll
+      if @selected < @top
+        scroll_top(@selected, height)
+      elsif @selected >= @top + height
+        scroll_top(@selected - height + 1, height)
+      end
+    end
+  end
+
+  def size
+    @tweets.size
+  end
+
+end
+
+class StreamingTweetView < TweetView
+
+  def initialize(parent, name)
+    super
+    @tweets << StreamLine.new(parent)
   end
 
   def <<(tweetline)
@@ -182,26 +240,6 @@ class TweetView
         @tweets.insert(-2, tweetline)
       end
     end
-  end
-
-  def [](*args)
-    @tweets[*args]
-  end
-
-  def delete_if
-    @tweets.delete_if { |t| yield(t) }
-  end
-
-  def each
-    @tweets.each { |t| yield(t) }
-  end
-
-  def find_index
-    @tweets.find_index { |t| yield(t) }
-  end
-
-  def size
-    @tweets.size
   end
 
 end

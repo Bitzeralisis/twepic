@@ -13,17 +13,35 @@ class TitlePanel < Panel
     @clients = clients
   end
 
+  def tick(time)
+    if @parent.tabs != @prev_tabs
+      @prev_tabs = @parent.tabs
+      flag_redraw
+    end
+
+    if @parent.tweetview != @prev_tab
+      @prev_tab = @parent.tweetview
+      flag_redraw
+    end
+  end
+
   def redraw
     pad.erase
 
     color1 = @focused ? [ 0,1,1,1, :bold, :reverse ] : [ 0,0,0,1, :bold, :reverse ]
-    color2 = @focused ? [ 0,1,1,0, :bold, :reverse ] : [ 0,0,0,1, :bold, :reverse ]
+    color2 = [ 0,1,1,0, :bold, :reverse ] # focused tab
+    color3 = [ 0,0,0,1, :bold, :reverse ] # non-focused tab
 
-    pad.color(*color2)
-    pad.write(3, 1, ' TIMELINE ')
+    xPos = 3
+    @parent.tabs.each do |tab|
+      color = tab == @parent.tweetview ? color2 : color3
+      pad.color(*color)
+      pad.write(xPos, 1, " #{tab.name} ")
+      xPos += tab.name.length + 3
+    end
 
     user = " CURRENT USER: @#{@clients.user.screen_name} "
-    pad.color(*color2)
+    pad.color(*color3)
     pad.write(size.x - user.length - 3, 1, user)
 
     pad.color(*color1)
@@ -54,13 +72,12 @@ class TweetsPanel < Panel
     self.size = screen_width, screen_height-15
 
     @tweetstore = tweetstore
-    @tweetview = @tweetstore.create_view(self)
+    @tweetview = StreamingTweetView.new(self, 'TIMELINE')
+    @tweetstore.attach_view(@tweetview)
     @title_panel = title_panel
 
     @prev_top = -1
-    @next_top = 0
     @prev_selected_vl = nil
-    @selected = 0
     @prev_visible_tweets = []
     @prev_last_visible_y = -1
 
@@ -72,47 +89,41 @@ class TweetsPanel < Panel
     @title_panel.focused=(rhs)
   end
 
+  def scroll_top(index, force_select_in_visible = false)
+    @tweetview.scroll_top(index, size.y, force_select_in_visible)
+  end
+
   def selected_tweet
-    @tweetview[@selected]
+    @tweetview[@tweetview.selected]
   end
 
   def selected_index
-    @selected
+    @tweetview.selected
+  end
+
+  def select_tweet(index, rebuild = false, force_scroll = true)
+    @tweetview.select_tweet(index, size.y, force_scroll)
+    @tweetstore.rebuild_reply_tree(selected_tweet) if selected_tweet.is_tweet? and rebuild
   end
 
   def visible_tweets
-    @tweetview[@next_top, size.y]
+    @tweetview[@tweetview.top, size.y]
   end
 
   def top
-    @next_top
+    @tweetview.top
   end
 
   def tweetview
     @tweetview
   end
 
-  def select_tweet(index, rebuild = true, force_scroll = true)
-    @selected = [ 0, [ index, @tweetview.size-1 ].min ].max
-    if force_scroll
-      if @selected < @next_top
-        scroll_top(@selected)
-      elsif @selected >= @next_top + size.y
-        scroll_top(@selected - size.y + 1)
-      end
-    end
-    @tweetstore.rebuild_reply_tree(selected_tweet) if selected_tweet.is_tweet? and rebuild
-  end
-
-  def scroll_top(index, force_select_in_visible = false)
-    @next_top = [ 0, [ index, @tweetview.size-1 ].min ].max
-    if force_select_in_visible
-      if @selected >= @next_top + size.y
-        select_tweet(@next_top + size.y - 1)
-      elsif @selected < @next_top
-        select_tweet(@next_top)
-      end
-    end
+  def tweetview=(rhs)
+    @tweetview = rhs
+    @prev_top = -1
+    @prev_selected_vl = nil
+    @prev_visible_tweets = []
+    @prev_last_visible_y = 10000
   end
 
   def update_relations
@@ -163,10 +174,10 @@ class TweetsPanel < Panel
       tl.tick_to(@time, time)
     end
 
-    flag_redraw if @prev_top != @next_top
-    update_relations if @prev_top != @next_top or @prev_selected_vl != selected_tweet
+    flag_redraw if @prev_top != @tweetview.top
+    update_relations if @prev_top != @tweetview.top or @prev_selected_vl != selected_tweet
 
-    @prev_top = @next_top
+    @prev_top = @tweetview.top
     @prev_selected_vl = selected_tweet
 
     @time += time
@@ -186,8 +197,8 @@ class TweetsPanel < Panel
     pad.color(0,0,0,1)
     (0...size.y).each { |y| pad.write(size.x-2, y, '|') }
 
-    top_end = ((size.y-1) * (@next_top.to_f / @tweetview.size)).floor
-    bottom_end = ((size.y-1) * [ (@next_top+size.y).to_f / @tweetview.size, 1.0 ].min).ceil
+    top_end = ((size.y-1) * (@tweetview.top.to_f / @tweetview.size)).floor
+    bottom_end = ((size.y-1) * [ (@tweetview.top+size.y).to_f / @tweetview.size, 1.0 ].min).ceil
     pad.color(1,1,1,1)
     pad.bold
     pad.write(size.x-2, top_end, 'o')

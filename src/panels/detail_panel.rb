@@ -15,6 +15,7 @@ class DetailPanel < Panel
     super()
     self.size = screen_width, 9
     @config = config
+    @tweetstore = tweetstore
     watch_store(tweetstore)
   end
 
@@ -97,51 +98,54 @@ class DetailPanel < Panel
   def redraw
     pad.erase
     stop_watching_all_profile_images
+    draw_at(@tweetline, 0)
+  end
 
+  def draw_at(tweetline, y = 0)
     # Draw the infobar
     color = @focused ? [ 0,1,1,1, :reverse ] : [ 0,0,0,1, :reverse ]
     pad.color(*color, :bold)
-    pad.write(0, 0, ''.ljust(size.x))
+    pad.write(0, y, ''.ljust(size.x))
 
-    unless @tweetline.is_tweet?
+    unless tweetline.is_tweet?
       text = ' NO TWEET SELECTED '
       xPos = (size.x - text.size) / 2
       pad.color(*color)
-      pad.write(xPos, 0, text)
+      pad.write(xPos, y, text)
       return
     end
 
-    if @tweetline.retweet?
+    if tweetline.retweet?
       xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
-      name = "@#{@tweetline.tweet.retweeted_status.user.screen_name}"
-      profile_image = get_and_watch_profile_image(@tweetline.tweet.retweeted_status.user)
-      UsernameColumn.draw_username(pad, xPos, 0, name, profile_image, :bold)
+      name = "@#{tweetline.tweet.retweeted_status.user.screen_name}"
+      profile_image = get_and_watch_profile_image(tweetline.tweet.retweeted_status.user)
+      UsernameColumn.draw_username(pad, xPos, y, name, profile_image, :bold)
       pad.color(0)
-      pad.write(xPos-1, 0, ' ')
+      pad.write(xPos-1, y, ' ')
       xPos += name.length
 
       pad.color(0,5,0, :bold)
-      pad.write(xPos, 0, ' << ')
+      pad.write(xPos, y, ' << ')
       xPos += 4
 
-      name = "@#{@tweetline.tweet.user.screen_name}"
-      profile_image = get_and_watch_profile_image(@tweetline.tweet.user)
-      UsernameColumn.draw_username(pad, xPos, 0, name, profile_image, :bold)
+      name = "@#{tweetline.tweet.user.screen_name}"
+      profile_image = get_and_watch_profile_image(tweetline.tweet.user)
+      UsernameColumn.draw_username(pad, xPos, y, name, profile_image, :bold)
       pad.color(0)
-      pad.write(xPos+name.length, 0, ' ')
+      pad.write(xPos+name.length, y, ' ')
     else
-      name = "@#{@tweetline.tweet.user.screen_name}"
-      profile_image = get_and_watch_profile_image(@tweetline.tweet.user)
+      name = "@#{tweetline.tweet.user.screen_name}"
+      profile_image = get_and_watch_profile_image(tweetline.tweet.user)
       pad.color(0)
-      pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, 0, ''.ljust(name.length+2))
-      UsernameColumn.draw_username(pad, ColumnDefinitions::COLUMNS[:UsernameColumn], 0, name, profile_image, :bold)
+      pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, y, ''.ljust(name.length+2))
+      UsernameColumn.draw_username(pad, ColumnDefinitions::COLUMNS[:UsernameColumn], y, name, profile_image, :bold)
     end
 
-    favs = 5,0,0, @tweetline.root_twepic_tweet.favorites == 0 ? '' : " ♥ #{@tweetline.root_twepic_tweet.favorites} "
-    rts = 0,5,0, @tweetline.root_tweet.retweet_count == 0 ? '' : " ⟳ #{@tweetline.root_tweet.retweet_count} "
-    time = 1,1,1,1, @tweetline.root_tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
-    source = 1,1,1,1, " #{@tweetline.root_tweet.source.gsub(/<.*?>/, '')} "
-    place = 1,1,1,0, @tweetline.root_tweet.place.nil? ? '' : " ⌖ #{@tweetline.tweet.place.name} "
+    favs = 5,0,0, tweetline.root_twepic_tweet.favorites == 0 ? '' : " ♥ #{tweetline.root_twepic_tweet.favorites} "
+    rts = 0,5,0, tweetline.root_tweet.retweet_count == 0 ? '' : " ⟳ #{tweetline.root_tweet.retweet_count} "
+    time = 1,1,1,1, tweetline.root_tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
+    source = 1,1,1,1, " #{tweetline.root_tweet.source.gsub(/<.*?>/, '')} "
+    place = 1,1,1,0, tweetline.root_tweet.place.nil? ? '' : " ⌖ #{tweetline.tweet.place.name} "
     xPos = size.x
     [ favs, rts, time, source, place ].reverse_each do |text|
       string = text.last
@@ -149,13 +153,13 @@ class DetailPanel < Panel
       next if string.empty?
       xPos -= UnicodeUtils.display_width(string)+1
       pad.color(*color)
-      pad.write(xPos, 0, string)
+      pad.write(xPos, y, string)
     end
 
     xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
-    yPos = 2
+    yPos = y+2
 
-    @tweetline.tweet_pieces.each do |piece|
+    tweetline.tweet_pieces.each do |piece|
       if @focused and !@linking_tweet_pieces.empty? and
           @linking_tweet_pieces[@selected_entity_index].grouped_with.include?(piece)
         pad.color(1,1,1,1, :bold, :reverse)
