@@ -69,11 +69,9 @@ class TweetsPanel < Panel
 
   def initialize(tweetstore, title_panel)
     super()
-    self.size = screen_width, screen_height-15
+    self.size = screen_width, screen_height-17
 
     @tweetstore = tweetstore
-    @tweetview = StreamingTweetView.new(self, 'TIMELINE')
-    @tweetstore.attach_view(@tweetview)
     @title_panel = title_panel
 
     @prev_top = -1
@@ -90,7 +88,7 @@ class TweetsPanel < Panel
   end
 
   def scroll_top(index, force_select_in_visible = false)
-    @tweetview.scroll_top(index, size.y, force_select_in_visible)
+    @tweetview.scroll_top(index, force_select_in_visible, size.y)
   end
 
   def selected_tweet
@@ -102,7 +100,7 @@ class TweetsPanel < Panel
   end
 
   def select_tweet(index, rebuild = false, force_scroll = true)
-    @tweetview.select_tweet(index, size.y, force_scroll)
+    @tweetview.select_tweet(index, force_scroll, size.y)
     @tweetstore.rebuild_reply_tree(selected_tweet) if selected_tweet.is_tweet? and rebuild
   end
 
@@ -161,6 +159,8 @@ class TweetsPanel < Panel
   end
 
   def tick(time)
+    return unless @tweetview
+
     # Set selected tweetlines
     if @prev_selected_vl != selected_tweet
       @prev_selected_vl.select(false) if @prev_selected_vl
@@ -183,6 +183,10 @@ class TweetsPanel < Panel
     @time += time
   end
 
+  def consume_input(input, config)
+    false
+  end
+
   def draw
     super
     visible_tweets.each { |tl| tl.draw }
@@ -192,7 +196,7 @@ class TweetsPanel < Panel
     pad.erase
 
     # Draw scrollbar
-    return if @tweetview.size == 0
+    return if !@tweetview || @tweetview.size == 0
 
     pad.color(0,0,0,1)
     (0...size.y).each { |y| pad.write(size.x-2, y, '|') }

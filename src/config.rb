@@ -24,46 +24,62 @@ class Config
   def initialize
     @config = {
         keybinds: {
-            ' '.ord => :select_current_selection,
-            'k'.ord => :select_cursor_up,
-             3      => :select_cursor_up,
-            'j'.ord => :select_cursor_down,
-             2      => :select_cursor_down,
-            'H'.ord => :select_top_line,
-            'M'.ord => :select_middle_line,
-            'L'.ord => :select_bottom_line,
-            'g'.ord => :select_first_line,
-            'G'.ord => :select_last_line,
-            'h'.ord => :select_previous_related_line,
-             4      => :select_previous_related_line,
-            'l'.ord => :select_next_related_line,
-             5      => :select_next_related_line,
+            PanelSet: {
+              ' '.ord => :select_current_selection,
+              'k'.ord => :select_cursor_up,
+               3      => :select_cursor_up,
+              'j'.ord => :select_cursor_down,
+               2      => :select_cursor_down,
+              'H'.ord => :select_top_line,
+              'M'.ord => :select_middle_line,
+              'L'.ord => :select_bottom_line,
+              'g'.ord => :select_first_line,
+              'G'.ord => :select_last_line,
+              'h'.ord => :select_previous_related_line,
+               4      => :select_previous_related_line,
+              'l'.ord => :select_next_related_line,
+               5      => :select_next_related_line,
 
-            'z'.ord => {
-                't'.ord => :scroll_cursor_to_top,
-                'z'.ord => :scroll_cursor_to_middle,
-                'b'.ord => :scroll_cursor_to_bottom,
+              'z'.ord => {
+                  't'.ord => :scroll_cursor_to_top,
+                  'z'.ord => :scroll_cursor_to_middle,
+                  'b'.ord => :scroll_cursor_to_bottom,
+              },
+
+              't'.ord => :compose_tweet,
+              'r'.ord => :compose_selection_reply,
+              'R'.ord => :compose_selection_reply_to_all,
+              'f'.ord => :selection_favorite,
+              'F'.ord => :selection_unfavorite,
+              'e'.ord => :selection_retweet,
+              'd'.ord => :selection_delete,
+              'y'.ord => :selection_copy_text,
+              'Y'.ord => :selection_copy_link,
+              'O'.ord => :selection_open_link_external,
+
+              'J'.ord => :tab_select_left,
+              'K'.ord => :tab_select_right,
+              'w'.ord => :tab_delete,
+              'u'.ord => :selection_new_tab_user_tweets,
+              'o'.ord => :selection_new_tab_related_tweets,
+
+              9       => :detail_panel_mode,
+              'Q'.ord => :quit,
             },
 
-            't'.ord => :compose_tweet,
-            'r'.ord => :compose_selection_reply,
-            'R'.ord => :compose_selection_reply_to_all,
-            'f'.ord => :selection_favorite,
-            'F'.ord => :selection_unfavorite,
-            'e'.ord => :selection_retweet,
-            'd'.ord => :selection_delete,
-            'y'.ord => :selection_copy_text,
-            'Y'.ord => :selection_copy_link,
-            'O'.ord => :selection_open_link_external,
+            DetailPanel: {
+              'h'.ord => :select_previous_entity,
+              4       => :select_previous_entity,
+              'l'.ord => :select_next_entity,
+              5       => :select_next_entity,
 
-            'H'.ord => :tab_select_left,
-            'L'.ord => :tab_select_right,
-            'w'.ord => :tab_delete,
-            'u'.ord => :selection_new_tab_user_tweets,
-            'o'.ord => :selection_new_tab_related_tweets,
+              'y'.ord => :selection_copy_text,
+              'Y'.ord => :selection_copy_link,
+              'O'.ord => :selection_open_link_external,
 
-            9       => :detail_panel_mode,
-            'Q'.ord => :quit,
+              9       => :timeline_mode,
+              27      => :timeline_mode,
+            },
         },
 
         event_in_display: {
@@ -130,8 +146,8 @@ class Config
     @config[:event_out_display][key]
   end
 
-  def keybinds
-    @config[:keybinds]
+  def keybinds(clazz)
+    @config[:keybinds][clazz.to_s.to_sym]
   end
 
   def tweet_colors_column(key)

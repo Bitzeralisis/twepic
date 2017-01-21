@@ -39,6 +39,10 @@ class ViewLine < Thing
     false
   end
 
+  def retweet?
+    false
+  end
+
   def select(selected = true)
     if @selected != selected
       @selected = selected
@@ -144,6 +148,10 @@ class TweetLine < ViewLine
 
   def is_tweet?
     true
+  end
+
+  def retweet?
+    is_tweet? && underlying_tweet.retweet?
   end
 
   def set_relations(relation = :none)

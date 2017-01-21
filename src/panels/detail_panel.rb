@@ -31,94 +31,54 @@ class DetailPanel < Panel
     flag_redraw if any_profile_image_changed?
   end
 
-  def consume_input(input)
-    case input
-      when 9, 27 # Tab, Esc
-        @parent.switch_mode(:timeline)
-      when 'h'.ord, 4 # Left
-        @selected_entity_index = @selected_entity_index <= 0 ? @linking_tweet_pieces.size-1 : @selected_entity_index-1
-        flag_redraw
-      when 'l'.ord, 5 # Right
-        @selected_entity_index = @selected_entity_index >= @linking_tweet_pieces.size-1 ? 0 : @selected_entity_index+1
-        flag_redraw
-      when 'y'.ord
-        selected_piece = @linking_tweet_pieces[@selected_entity_index]
-        if selected_piece
-          case selected_piece.type
-            when :mention_username
-              Clipboard.copy("@#{selected_piece.entity.screen_name}")
-              @parent.set_notice('COPIED USERNAME', 5,5,5)
-            when :hashtag
-              Clipboard.copy("\##{selected_piece.entity.text}")
-              @parent.set_notice('COPIED HASHTAG', 5,5,5)
-            when :link_domain
-              Clipboard.copy(selected_piece.entity.url)
-              @parent.set_notice('COPIED LINK', 5,5,5)
-          end
-        else
-          return false
-        end
-      when 'Y'.ord
-        selected_piece = @linking_tweet_pieces[@selected_entity_index]
-        if selected_piece
-          case selected_piece.type
-            when :mention_username
-              Clipboard.copy("https://twitter.com/#{selected_piece.entity.screen_name}")
-              @parent.set_notice('COPIED LINK TO USER', 5,5,5)
-            when :hashtag
-              Clipboard.copy(selected_piece.entity.text)
-              @parent.set_notice('COPIED HASHTAG TEXT', 5,5,5)
-            when :link_domain
-              Clipboard.copy(selected_piece.entity.expanded_url)
-              @parent.set_notice('COPIED FULL LINK', 5,5,5)
-          end
-        else
-          return false
-        end
-      when 'O'.ord
-        selected_piece = @linking_tweet_pieces[@selected_entity_index]
-        if selected_piece
-          case selected_piece.type
-            when :mention_username
-              Launchy.open("https://twitter.com/#{selected_piece.entity.screen_name}")
-              @parent.set_notice('OPENING USER IN BROWSER...', 5,5,5)
-            when :link_domain
-              Launchy.open(selected_piece.entity.expanded_url)
-              @parent.set_notice('OPENING LINK IN BROWSER...', 5,5,5)
-          end
-        else
-          return false
-        end
-      else
-        return false
-    end
-    true
-  end
-
   def redraw
     pad.erase
     stop_watching_all_profile_images
-    draw_at(@tweetline, 0)
+
+    unless @tweetline.is_tweet?
+      draw_at(false, @focused ? [ 1,1,1,1 ] : [ 0,0,0,1 ])
+      return
+    end
+
+    bar_color =
+        if @focused
+          @tweetline.retweet? ? [ 0,4,0 ] : [ 0,1,1,1 ]
+        else
+          [ 0,0,0,1 ]
+        end
+
+    reply = nil
+    if @tweetline.tweet.reply?
+      reply = @tweetstore.fetch(@tweetline.tweet.in_reply_to_status_id)
+      if reply
+        draw_at(@tweetline.underlying_tweet, bar_color, (0..4))
+        draw_at(reply, @focused ? [ 3,2,1 ] : [ 0,0,0,1 ], (6...size.y))
+        pad.color(5,4,2, :bold)
+        pad.write((size.x-7)/2, 6, ' ^ ^ ^ ')
+      end
+    end
+    draw_at(@tweetline.underlying_tweet, bar_color) unless reply
   end
 
-  def draw_at(tweetline, y = 0)
+  def draw_at(ttweet, bar_color, yRange = (0...size.y))
+    y = yRange.first
+
     # Draw the infobar
-    color = @focused ? [ 0,1,1,1, :reverse ] : [ 0,0,0,1, :reverse ]
-    pad.color(*color, :bold)
+    pad.color(*bar_color, :reverse)
     pad.write(0, y, ''.ljust(size.x))
 
-    unless tweetline.is_tweet?
+    unless ttweet
       text = ' NO TWEET SELECTED '
       xPos = (size.x - text.size) / 2
-      pad.color(*color)
+      pad.color(*bar_color, :reverse)
       pad.write(xPos, y, text)
       return
     end
 
-    if tweetline.retweet?
+    if ttweet.retweet?
       xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
-      name = "@#{tweetline.tweet.retweeted_status.user.screen_name}"
-      profile_image = get_and_watch_profile_image(tweetline.tweet.retweeted_status.user)
+      name = "@#{ttweet.tweet.retweeted_status.user.screen_name}"
+      profile_image = get_and_watch_profile_image(ttweet.tweet.retweeted_status.user)
       UsernameColumn.draw_username(pad, xPos, y, name, profile_image, :bold)
       pad.color(0)
       pad.write(xPos-1, y, ' ')
@@ -128,24 +88,24 @@ class DetailPanel < Panel
       pad.write(xPos, y, ' << ')
       xPos += 4
 
-      name = "@#{tweetline.tweet.user.screen_name}"
-      profile_image = get_and_watch_profile_image(tweetline.tweet.user)
+      name = "@#{ttweet.tweet.user.screen_name}"
+      profile_image = get_and_watch_profile_image(ttweet.tweet.user)
       UsernameColumn.draw_username(pad, xPos, y, name, profile_image, :bold)
       pad.color(0)
       pad.write(xPos+name.length, y, ' ')
     else
-      name = "@#{tweetline.tweet.user.screen_name}"
-      profile_image = get_and_watch_profile_image(tweetline.tweet.user)
+      name = "@#{ttweet.tweet.user.screen_name}"
+      profile_image = get_and_watch_profile_image(ttweet.tweet.user)
       pad.color(0)
       pad.write(ColumnDefinitions::COLUMNS[:UsernameColumn]-1, y, ''.ljust(name.length+2))
       UsernameColumn.draw_username(pad, ColumnDefinitions::COLUMNS[:UsernameColumn], y, name, profile_image, :bold)
     end
 
-    favs = 5,0,0, tweetline.root_twepic_tweet.favorites == 0 ? '' : " ♥ #{tweetline.root_twepic_tweet.favorites} "
-    rts = 0,5,0, tweetline.root_tweet.retweet_count == 0 ? '' : " ⟳ #{tweetline.root_tweet.retweet_count} "
-    time = 1,1,1,1, tweetline.root_tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
-    source = 1,1,1,1, " #{tweetline.root_tweet.source.gsub(/<.*?>/, '')} "
-    place = 1,1,1,0, tweetline.root_tweet.place.nil? ? '' : " ⌖ #{tweetline.tweet.place.name} "
+    favs = 5,0,0, ttweet.root_twepic_tweet.favorites == 0 ? '' : " ♥ #{ttweet.root_twepic_tweet.favorites} "
+    rts = 0,5,0, ttweet.root_tweet.retweet_count == 0 ? '' : " ⟳ #{ttweet.root_tweet.retweet_count} "
+    time = 1,1,1,1, ttweet.root_tweet.created_at.getlocal.strftime(' %Y-%m-%d %H:%M:%S ')
+    source = 1,1,1,1, " #{ttweet.root_tweet.source.gsub(/<.*?>/, '')} "
+    place = 1,1,1,0, ttweet.root_tweet.place.nil? ? '' : " ⌖ #{ttweet.tweet.place.name} "
     xPos = size.x
     [ favs, rts, time, source, place ].reverse_each do |text|
       string = text.last
@@ -159,7 +119,8 @@ class DetailPanel < Panel
     xPos = ColumnDefinitions::COLUMNS[:UsernameColumn]
     yPos = y+2
 
-    tweetline.tweet_pieces.each do |piece|
+    ttweet.tweet_pieces.each do |piece|
+      break unless yRange === yPos
       if @focused and !@linking_tweet_pieces.empty? and
           @linking_tweet_pieces[@selected_entity_index].grouped_with.include?(piece)
         pad.color(1,1,1,1, :bold, :reverse)
@@ -192,7 +153,6 @@ class DetailPanel < Panel
         end
       end
     end
-
   end
 
   def rerender
@@ -203,6 +163,70 @@ class DetailPanel < Panel
     return if old_size.x == new_size.x
     new_pad(new_size.x+1, 10)
     flag_redraw
+  end
+
+  private
+
+  def action_select_previous_entity
+    @selected_entity_index = @selected_entity_index <= 0 ? @linking_tweet_pieces.size-1 : @selected_entity_index-1
+    flag_redraw
+  end
+
+  def action_select_next_entity
+    @selected_entity_index = @selected_entity_index >= @linking_tweet_pieces.size-1 ? 0 : @selected_entity_index+1
+    flag_redraw
+  end
+
+  def action_selection_copy_text
+    selected_piece = @linking_tweet_pieces[@selected_entity_index]
+    if selected_piece
+      case selected_piece.type
+        when :mention_username
+          Clipboard.copy("@#{selected_piece.entity.screen_name}")
+          @parent.set_notice('COPIED USERNAME', 5,5,5)
+        when :hashtag
+          Clipboard.copy("\##{selected_piece.entity.text}")
+          @parent.set_notice('COPIED HASHTAG', 5,5,5)
+        when :link_domain
+          Clipboard.copy(selected_piece.entity.url)
+          @parent.set_notice('COPIED LINK', 5,5,5)
+      end
+    end
+  end
+
+  def action_selection_copy_link
+    selected_piece = @linking_tweet_pieces[@selected_entity_index]
+    if selected_piece
+      case selected_piece.type
+        when :mention_username
+          Clipboard.copy("https://twitter.com/#{selected_piece.entity.screen_name}")
+          @parent.set_notice('COPIED LINK TO USER', 5,5,5)
+        when :hashtag
+          Clipboard.copy(selected_piece.entity.text)
+          @parent.set_notice('COPIED HASHTAG TEXT', 5,5,5)
+        when :link_domain
+          Clipboard.copy(selected_piece.entity.expanded_url)
+          @parent.set_notice('COPIED FULL LINK', 5,5,5)
+      end
+    end
+  end
+
+  def action_selection_open_link_external
+    selected_piece = @linking_tweet_pieces[@selected_entity_index]
+    if selected_piece
+      case selected_piece.type
+        when :mention_username
+          Launchy.open("https://twitter.com/#{selected_piece.entity.screen_name}")
+          @parent.set_notice('OPENING USER IN BROWSER...', 5,5,5)
+        when :link_domain
+          Launchy.open(selected_piece.entity.expanded_url)
+          @parent.set_notice('OPENING LINK IN BROWSER...', 5,5,5)
+      end
+    end
+  end
+
+  def action_timeline_mode
+    @parent.switch_mode(:timeline)
   end
 
 end

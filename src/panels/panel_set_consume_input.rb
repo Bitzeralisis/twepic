@@ -3,41 +3,22 @@ require 'launchy'
 
 module PanelSetConsumeInput
 
-  def consume_input(input)
-    case input
-      # Mouse control
-      when Ncurses::KEY_MOUSE
-        mouse_event = Ncurses::MEVENT.new
-        Ncurses::getmouse(mouse_event)
-        if mouse_event.bstate & Ncurses::BUTTON1_PRESSED != 0
-          select_tweet(top + mouse_event.y-@tweets_panel.pos.y) if mouse_event.y >= @tweets_panel.pos.y && mouse_event.y < @tweets_panel.size.y+@tweets_panel.pos.y
-        elsif mouse_event.bstate & Ncurses::BUTTON4_PRESSED != 0
-          scroll_top(top-3)
-        elsif mouse_event.bstate & Ncurses::BUTTON2_PRESSED != 0 # or mouse_event.bstate & Ncurses::REPORT_MOUSE_POSITION != 0
-          scroll_top(top+3)
-        end
-
-      # Keyboard control
-      else
-        if @header == nil
-          action = config.keybinds[input]
-        else
-          action = config.keybinds[@header][input]
-          @header = nil
-        end
-
-        if action.is_a? Symbol
-          method("action_#{action.to_s}").call
-        elsif action.is_a? Hash
-          @header = input
-        end
-    end
-  end
+  include ConsumeInput
 
   private
 
+  def consume_mouse_input(mouse_event)
+    if mouse_event.bstate & Ncurses::BUTTON1_PRESSED != 0
+      select_tweet(top + mouse_event.y-@tweets_panel.pos.y) if mouse_event.y >= @tweets_panel.pos.y && mouse_event.y < @tweets_panel.size.y+@tweets_panel.pos.y
+    elsif mouse_event.bstate & Ncurses::BUTTON4_PRESSED != 0
+      scroll_top(top-3)
+    elsif mouse_event.bstate & Ncurses::BUTTON2_PRESSED != 0 # or mouse_event.bstate & Ncurses::REPORT_MOUSE_POSITION != 0
+      scroll_top(top+3)
+    end
+  end
+
   def action_select_current_selection
-    @tweets_panel.select_tweet(selected_index)
+    select_tweet(selected_index)
     @tweets_panel.update_relations
   end
 
@@ -125,23 +106,23 @@ module PanelSetConsumeInput
 
     # When replying to a retweet, we reply to the retweeted status, not the status that is a retweet
     reply_tweetline = selected_tweet
-    reply_to = reply_tweetline.root_tweet
+    reply_to = reply_tweetline.root_twepic_tweet
 
     # Populate the tweet with the @names of people being replied to
     if to_all # Also include @names of every person mentioned in the tweet
-      mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(reply_to.text)
+      mentioned_users = Twitter::Extractor::extract_mentioned_screen_names(reply_to.extended_text)
       mentioned_users = mentioned_users.uniq
-      mentioned_users.delete(reply_to.user.screen_name)
-      mentioned_users.unshift(reply_to.user.screen_name)
+      mentioned_users.delete(reply_to.tweet.user.screen_name)
+      mentioned_users.unshift(reply_to.tweet.user.screen_name)
       mentioned_users.delete(@clients.user.screen_name)
       mentioned_users << reply_tweetline.tweet.user.screen_name if reply_tweetline.retweet?
       mentioned_users.map! { |u| "@#{u}" }
       post = mentioned_users.empty? ? '' : "#{mentioned_users.join(' ')} "
     else # Only have @name of the user of the tweet
-      post = "@#{reply_to.user.screen_name} "
+      post = "@#{reply_to.tweet.user.screen_name} "
     end
 
-    @post_panel.set_target(post: post, reply_to: reply_to)
+    @post_panel.set_target(post: post, reply_to: reply_to.tweet)
     switch_mode(:post)
   end
 
@@ -220,10 +201,14 @@ module PanelSetConsumeInput
     return unless selected_tweet.is_tweet?
 
     selected = selected_tweet
-    view = TweetView.new(@tweets_panel, "USER: @#{selected.tweet.user.screen_name}")
+    id = selected.tweet.user.id
+    view = StreamingTweetView.new(@tweets_panel, "USER: @#{selected.tweet.user.screen_name}") do |tl|
+      tl.tweet.user.id == id
+    end
     @tweetstore.each { |tt| view << TweetLine.new(@tweets_panel, tt, @time-1000) if tt.tweet.user.id == selected.tweet.user.id }
     index = view.find_index { |tl| tl.tweet.id == selected.tweet.id }
-    view.select_tweet(index, @tweets_panel.size.y)
+    view.select_tweet(index, true, @tweets_panel.size.y)
+
     @tweetstore.attach_view(view)
     @tabs << view
     switch_tab(@tabs.size-1)
@@ -238,7 +223,8 @@ module PanelSetConsumeInput
     view = TweetView.new(@tweets_panel, 'REPLY TREE')
     @tweetstore.reply_tree.each { |tt| view << TweetLine.new(@tweets_panel, tt, @time-1000) }
     index = view.find_index { |tl| tl.tweet.id == selected.tweet.id }
-    view.select_tweet(index, @tweets_panel.size.y)
+    view.select_tweet(index, true, @tweets_panel.size.y)
+
     @tweetstore.attach_view(view)
     @tabs << view
     switch_tab(@tabs.size-1)

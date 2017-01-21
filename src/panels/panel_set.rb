@@ -50,8 +50,10 @@ class PanelSet < ThingContainer
     @confirm_panel = ConfirmPanel.new
     @events_panel = EventsPanel.new(@clients, @config)
 
-    @stream_tab = @tweets_panel.tweetview
-    @tabs = [ @stream_tab ]
+    stream_tab = StreamingTweetView.new(@tweets_panel, 'TIMELINE') { |_| true }
+    @tweetstore.attach_view(stream_tab)
+    @tweets_panel.tweetview = stream_tab
+    @tabs = [ stream_tab ]
     @current_tab = 0
 
     focus_panel(@tweets_panel)
@@ -159,17 +161,18 @@ class PanelSet < ThingContainer
       @events_panel.add_incoming_event(event)
       case event
         when Twitter::Tweet
-          # If we can scroll down one tweet without the selection arrow
-          # disappearing, then do so, but only if the view is full
-          scroll_top(top+1) if selected_index > top && top + @tweets_panel.size.y == tweetview.size if tweetview == @stream_tab
           @tweetstore << TwepicTweet.new(event.retweeted_tweet, @tweetstore) if event.retweet?
           tweet = TwepicTweet.new(event, @tweetstore)
           @tweetstore << tweet
-          @stream_tab << TweetLine.new(@tweets_panel, tweet, @time)
-          # If the selection arrow was on the streaming spinner, then follow it
-          select_tweet(selected_index+1) if selected_index == tweetview.size-2 if tweetview == @stream_tab
+          @tweetstore << TweetLine.new(@tweets_panel, tweet, @time)
 
         when Twitter::Streaming::DeletedTweet
+          # TODO: Remove deleted tweet from reply list of other tweet this is in reply to
+          deleted_ttweet = @tweetstore.fetch(event.id)
+          if deleted_ttweet&.tweet&.reply?
+            replied_to_ttweet = @tweetstore.fetch(deleted_ttweet.tweet.in_reply_to_status_id)
+            replied_to_ttweet&.replies_to_this&.delete_if { |tt| tt.tweet.id == event.id }
+          end
           @tweetstore.delete_id(event.id)
           # TODO: Instead of shifting everything up, attempt to keep @selected on the same y-position
           # TODO: Decrement retweet count of deleted retweets' root tweets
@@ -209,8 +212,8 @@ class PanelSet < ThingContainer
     while true
       input = world.getch
       break if input == -1
-      unless @focused_panel.consume_input(input)
-        consume_input(input)
+      unless @focused_panel.consume_input(input, @config)
+        consume_input(input, @config)
       end
     end
 

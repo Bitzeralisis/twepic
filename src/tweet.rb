@@ -32,6 +32,7 @@ class TwepicTweet
     end
 
     # TODO: Determine if this tweet was replied to by any other tweet in the store
+    # Only going to be a problem once we start fetching tweets from the past
     @replies_to_this = []
 
     if @tweet.reply?

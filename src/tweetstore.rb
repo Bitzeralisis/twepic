@@ -44,7 +44,7 @@ class TweetStore
         end
 
       when TweetLine
-        # @views.each { |v| v << tweet }
+        @views.each { |v| v.stream(tweet) }
     end
   end
 
@@ -151,14 +151,16 @@ end
 
 class TweetView
 
+  attr_accessor :height
   attr_reader :name
   attr_reader :selected
   attr_reader :top
 
-  def initialize(parent, name)
+  def initialize(parent, name, &block)
     @parent = parent
     @name = name
     @tweets = []
+    @stream_filter = block || lambda { |_| false }
 
     @selected = 0
     @top = 0
@@ -174,6 +176,8 @@ class TweetView
 
   def delete_if
     @tweets.delete_if { |t| yield(t) }
+    select_tweet(@selected, nil, false)
+    scroll_top(@top, nil, false)
   end
 
   def each
@@ -184,24 +188,24 @@ class TweetView
     @tweets.find_index { |t| yield(t) }
   end
 
-  def scroll_top(index, height, force_select_in_visible = false)
+  def scroll_top(index, force_select_in_visible = false, height = 0)
     @top = [ 0, [ index, size-1 ].min ].max
     if force_select_in_visible
       if @selected >= @top + height
-        select_tweet(@top + height - 1, height)
+        select_tweet(@top + height - 1, true, height)
       elsif @selected < @top
-        select_tweet(@top, height)
+        select_tweet(@top, true, height)
       end
     end
   end
 
-  def select_tweet(index, height, force_scroll = true)
+  def select_tweet(index, force_scroll = true, height = 0)
     @selected = [ 0, [ index, size-1 ].min ].max
     if force_scroll
       if @selected < @top
-        scroll_top(@selected, height)
+        scroll_top(@selected)
       elsif @selected >= @top + height
-        scroll_top(@selected - height + 1, height)
+        scroll_top(@selected - height + 1)
       end
     end
   end
@@ -210,18 +214,27 @@ class TweetView
     @tweets.size
   end
 
+  def stream(tl)
+    self << tl if @stream_filter.(tl)
+  end
+
 end
 
 class StreamingTweetView < TweetView
 
-  def initialize(parent, name)
+  def initialize(parent, name, &block)
     super
     @tweets << StreamLine.new(parent)
   end
 
   def <<(tweetline)
     if true
+      # If we can scroll down one tweet without the selection arrow
+      # disappearing, then do so, but only if the view is full
+      scroll_top(@top+1) if @selected > @top && @top + @parent.size.y == size
       @tweets.insert(-2, tweetline)
+      # If the selection arrow was on the streaming spinner, then follow it
+      select_tweet(@selected+1, true, @parent.size.y) if @selected == size-2
     else
       # Code that automatically puts consequtive RTs into a fold. Currently not in use
       last = @tweets[-2] # Ignore the streaming spinner

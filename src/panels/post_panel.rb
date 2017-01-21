@@ -26,7 +26,7 @@ class PostPanel < Panel
     @time += time
   end
 
-  def consume_input(input)
+  def consume_input(input, config)
     case input
 
       when Ncurses::KEY_MOUSE
@@ -98,7 +98,7 @@ class PostPanel < Panel
 
     if @reply_to
       pad.color(r,g,b, :bold)
-      pad.write((size.x-5)/2, 1, 'v v v')
+      pad.write((size.x-7)/2, 3, ' v v v ')
     end
 
     pad.color(r,g,b, :bold, :reverse)
@@ -113,11 +113,7 @@ class PostPanel < Panel
   end
 
   def rerender
-    if @reply_to
-      rerender_pad(Coord.new(0, 1), Coord.new(size.x, size.y-1))
-    else
-      rerender_pad(Coord.new(0, 2), Coord.new(size.x, size.y-2))
-    end
+    rerender_pad(Coord.new(0, 2), Coord.new(size.x, size.y-2))
   end
 
   def on_resize(old_size, new_size)
@@ -152,7 +148,7 @@ class ConfirmPanel < Panel
     @time += time
   end
 
-  def consume_input(input)
+  def consume_input(input, config)
     if @confirm_keys.include?(input)
       case @action_type
         when :retweet
